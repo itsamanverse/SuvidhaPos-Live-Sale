@@ -1,0 +1,81 @@
+name: SuvidhaPos Live Sale APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: stable
+          cache: true
+
+      - name: Prepare Android wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
+            flutter create --platforms=android --org com.suvidhapos --project-name suvidhalivesale .
+          fi
+          chmod +x android/gradlew
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Format check
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
+
+      - name: Build single universal APK
+        run: flutter build apk --release
+
+      - name: Verify exactly one APK was produced
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_DIR='build/app/outputs/flutter-apk'
+          mapfile -t APKS < <(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print | sort)
+          echo "APK files found: ${#APKS[@]}"
+          printf '%s\n' "${APKS[@]:-}"
+          if [ "${#APKS[@]}" -ne 1 ]; then
+            echo 'ERROR: Expected exactly one universal APK.'
+            exit 1
+          fi
+          case "${APKS[0]}" in
+            *app-release.apk) ;;
+            *)
+              echo 'ERROR: Unexpected APK output; split APKs are not allowed.'
+              exit 1
+              ;;
+          esac
+
+      - name: Rename APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SuvidhaPos-Live-Sale.apk
+          ls -lh build/app/outputs/flutter-apk/SuvidhaPos-Live-Sale.apk
+
+      - name: Upload single APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuvidhaPos-Live-Sale
+          path: build/app/outputs/flutter-apk/SuvidhaPos-Live-Sale.apk
+          if-no-files-found: error
