@@ -383,7 +383,7 @@ class ApiService {
         );
       }
       if (lastError is _HttpStatusException) {
-        final error = lastError as _HttpStatusException;
+        final error = lastError;
         final serverText = error.message.toLowerCase();
         if (serverText.contains('api key') ||
             serverText.contains('api-key') ||
@@ -3480,12 +3480,6 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     }
   }
 
-  @override
-  void dispose() {
-    timer?.cancel();
-    super.dispose();
-  }
-
   Future<void> _restoreCachedLive() async {
     final cacheId = normalizedId(widget.outletId).isEmpty ? '0' : normalizedId(widget.outletId);
     final cached = await OfflineStore.read('live_$cacheId');
@@ -3917,8 +3911,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       },
     );
     autoClose = Timer(const Duration(seconds: 20), () {
-      if (mounted && Navigator.of(context).canPop())
+      if (mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
+      }
     });
     await dialogFuture;
     autoClose?.cancel();
