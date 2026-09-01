@@ -8,3 +8,6 @@
 - Gross/Tax/Discount/other summary fields can also be backfilled from uniquely identified bill rows when those fields are absent.
 - Top Selling Items are reconciled on every dashboard sync while existing bill details remain cached.
 - GitHub Actions builds one universal release APK and uploads `SuvidhaPos-Live-Sale.apk`.
+
+- Live Tables financial/status data now comes from `/LiveTableItem/Sale` per outlet + bill; Dashboard/Sale is discovery-only.
+- Live table cards and popup use the POS table identifier as `Table No: WS1` rather than converting it to `Table 1`.

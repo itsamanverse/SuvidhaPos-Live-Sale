@@ -527,6 +527,10 @@ class ApiService {
     });
   }
 
+  /// Live Tables are backed by the POS LiveTableItem/Sale endpoint.
+  /// The endpoint is bill-scoped, so the dashboard endpoint is used only to
+  /// discover the current bill/table keys; every Live Tables value/detail is
+  /// then read from this endpoint.
   Future<Map<String, dynamic>> liveTable(String outletId, String billNo) {
     return post('/LiveTableItem/Sale', {
       'outlet_id': outletId,
@@ -803,7 +807,10 @@ num itemAmountOf(Map<String, dynamic> row) => number(field(row, [
     ]));
 
 String tableNoOf(Map<String, dynamic> row) => stringValue(
-      field(row, ['tableNo', 'tableno', 'table_No', 'table_no']),
+      field(row, [
+        'tableNo', 'tableno', 'table_No', 'table_no', 'tableName', 'table_name',
+        'TableNo', 'Table_No', 't_Name', 't_name'
+      ]),
       '—',
     );
 
@@ -3532,7 +3539,11 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   Future<Map<String, dynamic>> _loadLiveFor(String outletId) async {
     final now = DateTime.now();
     final id = normalizedId(outletId).isEmpty ? '0' : normalizedId(outletId);
-    return responseMap(await widget.api
+
+    // Dashboard/Sale is discovery-only here: it gives us the bill numbers that
+    // have to be passed to LiveTableItem/Sale. No Live Tables metric is taken
+    // from Dashboard/Sale.
+    final discovery = responseMap(await widget.api
         .dashboard(
           apiDate(now),
           apiDate(now),
@@ -3540,6 +3551,155 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
           useOutletFilter: id != '0',
         )
         .timeout(const Duration(seconds: 20)));
+    final candidates = rowsFromResponse(
+      discovery,
+      [
+        'liveSale',
+        'liveSales',
+        'liveTable',
+        'liveTables',
+        'recentSales',
+        'recentSale',
+        'saleSummary',
+        'salesummary',
+        'salesSummary',
+        'summary',
+        'sale'
+      ],
+      ['billno', 'bill_no', 'bill_nofk', 'tableno', 'table_no'],
+    );
+
+    final scoped = candidates.where((row) {
+      final bill = billNoOf(row).trim();
+      if (bill.isEmpty) return false;
+      return id == '0'
+          ? outletIdOf(row).isNotEmpty
+          : rowMatchesOutlet(
+              row,
+              id,
+              outletName: selectedOutletNameForLive(id),
+            );
+    }).toList();
+
+    final unique = <String, Map<String, dynamic>>{};
+    for (final row in scoped) {
+      final rowOutlet = outletIdOf(row).isEmpty ? id : outletIdOf(row);
+      if (rowOutlet.isEmpty || rowOutlet == '0') continue;
+      final bill = billNoOf(row).trim();
+      unique['$rowOutlet|$bill'] = row;
+    }
+
+    final enriched = <Map<String, dynamic>>[];
+    const concurrency = 4;
+    final entries = unique.entries.toList();
+    for (var offset = 0; offset < entries.length; offset += concurrency) {
+      final batch = entries.skip(offset).take(concurrency).toList();
+      final results = await Future.wait(batch.map((entry) async {
+        final base = Map<String, dynamic>.from(entry.value);
+        try {
+          final detail = responseMap(await widget.api
+              .liveTable(entry.key.split('|').first, entry.key.split('|').last)
+              .timeout(const Duration(seconds: 20)));
+          final detailRow = _liveDetailSummaryRow(detail);
+          final merged = <String, dynamic>{...base, ...detailRow};
+          // Never lose the discovery identity when a detail response omits it.
+          if (outletIdOf(merged).isEmpty) merged['outlet_id'] = entry.key.split('|').first;
+          if (billNoOf(merged).isEmpty) merged['bill_no'] = entry.key.split('|').last;
+          return merged;
+        } catch (_) {
+          // A failed bill-detail request is not allowed to turn a stale or
+          // partial Dashboard row into a fake Live Table metric. Keep the row
+          // only as a visual fallback; all financial totals below ignore rows
+          // without authoritative LiveTableItem/Sale fields.
+          return <String, dynamic>{
+            ...base,
+            '_liveDetailFailed': true,
+          };
+        }
+      }));
+      enriched.addAll(results);
+    }
+
+    return {
+      'liveSale': enriched,
+      'saleSummary': enriched,
+    };
+  }
+
+  Map<String, dynamic> _liveDetailSummaryRow(Map<String, dynamic> response) {
+    final direct = <String, dynamic>{};
+    final detailRows = rowsFromResponse(
+      response,
+      [
+        'sale',
+        'sales',
+        'saleDetail',
+        'saleSummary',
+        'salesummary',
+        'salesSummary',
+        'summary',
+        'bill',
+        'billDetail',
+        'liveSale',
+        'liveTable',
+        'liveTables'
+      ],
+      [
+        'grosssale',
+        'gross_sale',
+        'grosstotal',
+        'netsale',
+        'net_sale',
+        'nettotal',
+        'pendingamt',
+        'pendingamount',
+        'tableno',
+        'table_no'
+      ],
+    );
+    if (detailRows.isNotEmpty) direct.addAll(detailRows.first);
+
+    // Some deployments return the financial fields at the root and the item
+    // list under `itms`. Preserve root fields as the highest-level source.
+    for (final key in [
+      'outlet_id',
+      'outletId',
+      'outlet_name',
+      'outletName',
+      'bill_no',
+      'billNo',
+      'table_no',
+      'tableNo',
+      'tableno',
+      'bill_status',
+      'billStatus',
+      'status',
+      'grossSale',
+      'gross_sale',
+      'grossTotal',
+      'gross_total',
+      'netSale',
+      'net_sale',
+      'netTotal',
+      'net_total',
+      'pendingAmt',
+      'pendingAmount',
+      'pending_amt',
+      'unSatteledAmount',
+      'unSettledAmount',
+      'unsettledAmount',
+      'settlementPending',
+      'pendingSettlement',
+      'cover',
+      'pax',
+      'bill_time',
+      'billTime',
+      'time'
+    ]) {
+      final value = field(response, [key]);
+      if (value != null) direct[key] = value;
+    }
+    return direct;
   }
 
   List<Map<String, dynamic>> _scopeLiveRows(
@@ -3591,7 +3751,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     if (loading) return;
     final selected = resetOutlet
         ? '0'
-        : (normalizedId(selectedOutletId).isEmpty ? '0' : normalizedId(selectedOutletId));
+        : (normalizedId(selectedOutletId).isEmpty
+            ? '0'
+            : normalizedId(selectedOutletId));
     if (resetOutlet) setState(() => selectedOutletId = '0');
     if (mounted) setState(() => loading = true);
 
@@ -3605,7 +3767,6 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             .where((id) => id.isNotEmpty && id != '0')
             .toSet()
             .toList();
-
         if (ids.isEmpty) {
           final response = await _loadLiveFor('0');
           allLive.addAll(_extractLive(response));
@@ -3636,7 +3797,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         'saleSummary': allSummary,
       });
     } catch (_) {
-      // Keep last successful snapshot; periodic refresh retries.
+      // Keep the last successful snapshot; the next 60-second sync retries.
     } finally {
       if (mounted) setState(() => loading = false);
     }
@@ -3703,6 +3864,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       .toList();
 
   List<Map<String, dynamic>> get selectedLive => liveTableCandidates
+      .where((r) => r['_liveDetailFailed'] != true)
       .where(_isActualLiveTable)
       .where((r) => rowMatchesOutlet(
             r,
@@ -3712,6 +3874,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       .toList();
 
   List<Map<String, dynamic>> get selectedSummaries => summaryRows
+      .where((r) => r['_liveDetailFailed'] != true)
       .where((r) => rowMatchesOutlet(
             r,
             selectedOutletId,
@@ -3782,7 +3945,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
                         children: [
                           Expanded(
                             child: Text(
-                              'Table ${tableNoOf(table)}',
+                              'Table No: ${tableNoOf(table)}',
                               style: const TextStyle(
                                   fontSize: 24, fontWeight: FontWeight.w900),
                             ),
@@ -4018,6 +4181,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   @override
   Widget build(BuildContext context) {
     final rows = selectedLive;
+    // All financial cards in this page are calculated only from successful
+    // LiveTableItem/Sale responses. Dashboard/Sale is never a financial
+    // fallback for Live Tables.
     final gross = _metric(
       ['grossSale', 'gross_sale', 'billAmount', 'bill_amount', 'amount'],
       ['grossTotal', 'grossSale', 'gross_sale', 'grossAmount', 'totalGross', 'gross', 'gross_total', 'total_gross'],
@@ -4072,7 +4238,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             Text(selectedOutletName,
                 style:
                     const TextStyle(fontSize: 27, fontWeight: FontWeight.w900)),
-            const Text('Auto refresh every 20 seconds',
+            const Text('Auto refresh every 60 seconds',
                 style: TextStyle(color: Colors.white70)),
             const SizedBox(height: 12),
             Container(
@@ -4196,7 +4362,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
                             Row(
                               children: [
                                 Expanded(
-                                    child: Text('Table ${tableNoOf(row)}',
+                                    child: Text('Table No: ${tableNoOf(row)}',
                                         style: const TextStyle(
                                             fontSize: 17,
                                             fontWeight: FontWeight.w900))),

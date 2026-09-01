@@ -27,8 +27,12 @@ clears only the old login credentials.
 - Gross Sale uses the authoritative scoped summary before chart fallbacks.
 - Top Selling Items is loaded from dashboard item rows and falls back to bill
   detail data with bounded retries.
-- Live Tables rejects settled/recent-sale rows that do not represent actual
-  open tables.
+- Live Tables uses `LiveTableItem/Sale` as the source of truth for table-level
+  status, table name, items, Gross Sale, Net Sale and Pending Amount.
+- `Dashboard/Sale` is used only to discover the current outlet/bill keys needed
+  to call the bill-scoped Live Tables endpoint; its financial values are never
+  used as Live Tables financial fallbacks.
+- Live table labels use the POS table identifier format, e.g. `Table No: WS1`.
 - Date/outlet changes invalidate dependent caches to prevent stale data crossing
   scopes.
 
