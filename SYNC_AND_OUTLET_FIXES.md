@@ -1,13 +1,21 @@
 # SuvidhaPos Live Sale — Sync & Outlet Data Fixes
 
-- Dashboard and Live Tables auto-refresh every 60 seconds.
+- Dashboard stays on a 60-second foreground timer while the Dashboard tab is active.
+- Live Tables performs one immediate sync when its tab is entered and then refreshes every 60 seconds while that tab remains active. It does not poll while hidden in the `IndexedStack`.
+- Reports performs one immediate **Daily** sync when its tab is entered. It does not auto-poll while the user remains on Reports. Weekly/Monthly/Yearly are fetched only when the user explicitly selects those tabs; returning to Reports starts a fresh Daily sync.
+- Repeated navigation clicks are treated as explicit activation events, so a Live Tables entry always gets a fresh sync.
 - Dashboard discovers outlet IDs and passes them to Live Tables so All Outlets can scope per-outlet requests safely.
 - Single-outlet Dashboard/Sale responses are treated as already scoped even when their summary row has no outlet ID.
-- Missing single-outlet metrics are backfilled only from the matching aggregate outlet row when the scoped value is zero.
-- Gross Sale never falls back to Net Sale. When the POS omits an explicit gross field, Gross Sale is derived from Avg Revenue (Per Bill) × Order Count, matching the web POS metric.
-- Gross/Tax/Discount/other summary fields can also be backfilled from uniquely identified bill rows when those fields are absent.
-- Top Selling Items are reconciled on every dashboard sync while existing bill details remain cached.
+- Gross Sale never falls back to Net Sale, Avg Revenue, or Order Count. A missing explicit Gross field remains `0` rather than displaying Net as Gross.
+- Top Selling Items are refreshed from `/Tablet/ListofItems/POS` with `billType=k` on Dashboard sync, with the last successful result retained for offline rendering.
 - GitHub Actions builds one universal release APK and uploads `SuvidhaPos-Live-Sale.apk`.
 
-- Live Tables financial/status data now comes from `/LiveTableItem/Sale` per outlet + bill; Dashboard/Sale is discovery-only.
-- Live table cards and popup use the POS table identifier as `Table No: WS1` rather than converting it to `Table 1`.
+## API source of truth
+
+- Dashboard / Reports: `POST /api/V1/Dashboard/Sale`
+- Live Tables: `POST /api/V1/LiveTableItem/Sale`
+- Top Selling Items: `POST /api/V1/Tablet/ListofItems/POS` with `billType=k`
+
+## Live server verification
+
+`LIVE_SERVER_50X_TEST.md` and `.github/workflows/live-api-50x-smoke.yml` provide a manual 50x live POS smoke test. The build environment used here could not resolve the POS API host, so live-server success is not claimed without a real network run.
