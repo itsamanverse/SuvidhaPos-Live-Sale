@@ -1259,6 +1259,13 @@ class _DashboardShellState extends State<DashboardShell> {
   String selectedOutlet = '0';
   String selectedOutletName = 'All Outlets';
   List<Map<String, dynamic>> availableOutlets = [];
+  final ValueNotifier<int> syncSignal = ValueNotifier<int>(0);
+
+  @override
+  void dispose() {
+    syncSignal.dispose();
+    super.dispose();
+  }
 
   Future<void> logout() async {
     await widget.onLogout();
@@ -1278,6 +1285,10 @@ class _DashboardShellState extends State<DashboardShell> {
             selectedOutletName = name;
           });
         },
+        onLiveSync: () async {
+          syncSignal.value++;
+        },
+        syncSignal: syncSignal,
         onOutletsChanged: (outlets) {
           if (!mounted) return;
           setState(() {
@@ -1292,6 +1303,7 @@ class _DashboardShellState extends State<DashboardShell> {
         outletId: selectedOutlet,
         outletName: selectedOutletName,
         availableOutlets: availableOutlets,
+        syncSignal: syncSignal,
         onLogout: logout,
       ),
       ReportsPage(
@@ -1337,6 +1349,8 @@ class DashboardPage extends StatefulWidget {
   final String selectedOutlet;
   final void Function(String id, String name) onOutletChanged;
   final void Function(List<Map<String, dynamic>> outlets)? onOutletsChanged;
+  final Future<void> Function() onLiveSync;
+  final ValueNotifier<int> syncSignal;
   final Future<void> Function() onLogout;
 
   const DashboardPage({
@@ -1346,6 +1360,8 @@ class DashboardPage extends StatefulWidget {
     required this.selectedOutlet,
     required this.onOutletChanged,
     this.onOutletsChanged,
+    required this.onLiveSync,
+    required this.syncSignal,
     required this.onLogout,
   });
 
@@ -1837,43 +1853,68 @@ class _DashboardPageState extends State<DashboardPage> {
               .toList();
         }
 
-        if (scopedResponseSummary.isNotEmpty) {
+        // IMPORTANT: The aggregate Dashboard/Sale response contains the
+        // authoritative date-range totals for each outlet. Some POS gateway
+        // deployments treat an `ids=<outlet>` request as a live/current-day
+        // scoped feed and return only a partial figure (for example ₹25,412)
+        // even though the outlet row in the aggregate response is the correct
+        // selected-range total (for example ₹3,11,825). Therefore the outlet
+        // row from the aggregate response wins for Dashboard metrics when it
+        // has real sales data. The scoped response remains the source for live
+        // tables/items below.
+        final aggregateOutlet = apiSelected.isNotEmpty
+            ? normalizeApiMetricRow(apiSelected.first)
+            : <String, dynamic>{};
+        final aggregateHasSales = number(field(aggregateOutlet, [
+                  'grossTotal', 'grossSale', 'gross_sale', 'gross_total'
+                ])) >
+                0 ||
+            number(field(aggregateOutlet, [
+                  'netTotal', 'netSale', 'net_sale', 'net_total'
+                ])) >
+                0;
+
+        if (aggregateHasSales) {
+          combinedSummary = _attachOutletContext(
+            [aggregateOutlet],
+            selectedId,
+          );
+          // Fill only metrics that are genuinely absent from the aggregate
+          // outlet row. Never overwrite its Gross/Net with the partial scoped
+          // response.
+          if (scopedResponseSummary.isNotEmpty) {
+            final primary = Map<String, dynamic>.from(combinedSummary.first);
+            final scoped = normalizeApiMetricRow(scopedResponseSummary.first);
+            const fillIfMissing = [
+              'taxTotal',
+              'discountTotal',
+              'coverTotal',
+              'orderTotal',
+              'customerServed',
+              'unSatteledAmount',
+              'unSatteledBill',
+              'avgRevenue',
+              'voidBill',
+              'modifiedBill',
+              'complementary',
+            ];
+            for (final key in fillIfMissing) {
+              if (number(primary[key]) == 0 && number(scoped[key]) != 0) {
+                primary[key] = scoped[key];
+              }
+            }
+            combinedSummary = [primary];
+          }
+        } else if (scopedResponseSummary.isNotEmpty) {
           combinedSummary = _attachOutletContext(
             scopedResponseSummary,
             selectedId,
           );
-        } else if (apiSelected.isNotEmpty) {
-          combinedSummary = apiSelected.map(normalizeApiMetricRow).toList();
         } else {
           combinedSummary = _attachOutletContext(
             summaryRowsFromApi(response).map(normalizeApiMetricRow).toList(),
             selectedId,
           );
-        }
-
-        // Merge non-zero metrics from the aggregate outlet row only when the
-        // scoped response omitted/zeroed that metric. Never replace a valid
-        // scoped Gross Sale with the aggregate placeholder.
-        if (apiSelected.isNotEmpty && combinedSummary.isNotEmpty) {
-          final primary = Map<String, dynamic>.from(combinedSummary.first);
-          final fallbackRow = normalizeApiMetricRow(apiSelected.first);
-          const mergeKeys = [
-            'netTotal',
-            'taxTotal',
-            'discountTotal',
-            'coverTotal',
-            'orderTotal',
-            'customerServed',
-            'unSatteledAmount',
-            'unSatteledBill',
-            'avgRevenue',
-          ];
-          for (final key in mergeKeys) {
-            if (number(primary[key]) == 0 && number(fallbackRow[key]) != 0) {
-              primary[key] = fallbackRow[key];
-            }
-          }
-          combinedSummary = [primary];
         }
 
         final selectedOutletMeta = outletList.firstWhere(
@@ -3042,17 +3083,29 @@ class _DashboardPageState extends State<DashboardPage> {
                   Border.all(color: Colors.cyanAccent.withValues(alpha: .55)),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.radar_rounded, size: 16, color: Colors.cyanAccent),
-                SizedBox(width: 5),
-                Text('LIVE',
-                    style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: .8)),
-              ],
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: loading
+                  ? null
+                  : () async {
+                      widget.onLiveSync();
+                      await load(resetOutlet: true);
+                    },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.radar_rounded, size: 16, color: Colors.cyanAccent),
+                    SizedBox(width: 5),
+                    Text('LIVE',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .8)),
+                  ],
+                ),
+              ),
             ),
           ),
           IconButton(
@@ -3359,6 +3412,7 @@ class LiveTablesPage extends StatefulWidget {
   final String outletId;
   final String outletName;
   final List<Map<String, dynamic>> availableOutlets;
+  final ValueNotifier<int> syncSignal;
   final Future<void> Function() onLogout;
 
   const LiveTablesPage({
@@ -3367,6 +3421,7 @@ class LiveTablesPage extends StatefulWidget {
     required this.outletId,
     required this.outletName,
     this.availableOutlets = const [],
+    required this.syncSignal,
     required this.onLogout,
   });
 
@@ -3380,11 +3435,16 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   bool loading = false;
   Timer? timer;
   String selectedOutletId = '0';
+  late final VoidCallback _syncListener;
 
   @override
   void initState() {
     super.initState();
     selectedOutletId = widget.outletId.trim().isEmpty ? '0' : widget.outletId.trim();
+    _syncListener = () {
+      if (mounted && !loading) load();
+    };
+    widget.syncSignal.addListener(_syncListener);
     _restoreCachedLive().then((_) => load());
     timer = Timer.periodic(
       const Duration(seconds: refreshSeconds),
@@ -3393,8 +3453,19 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   }
 
   @override
+  void dispose() {
+    widget.syncSignal.removeListener(_syncListener);
+    timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant LiveTablesPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.syncSignal != widget.syncSignal) {
+      oldWidget.syncSignal.removeListener(_syncListener);
+      widget.syncSignal.addListener(_syncListener);
+    }
     final oldId = normalizedId(oldWidget.outletId).isEmpty
         ? '0'
         : normalizedId(oldWidget.outletId);
