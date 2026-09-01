@@ -2152,8 +2152,10 @@ class _DashboardPageState extends State<DashboardPage> {
   /// field but expose Avg Revenue (Per Bill) and Order Count. In the POS data
   /// those two values reproduce Gross Sale exactly, so use that as a safe
   /// fallback. Never substitute Net Sale for Gross Sale.
-  num _authoritativeGross(List<Map<String, dynamic>> rows) =>
-      rows.fold<num>(0, (sum, row) => sum + dashboardGrossValue(row));
+  num _authoritativeGross(List<Map<String, dynamic>> rows, {num fallback = 0}) {
+    final value = rows.fold<num>(0, (sum, row) => sum + dashboardGrossValue(row));
+    return value != 0 ? value : fallback;
+  }
 
   List<Map<String, dynamic>> outletPerformance() {
     // Chart data is deliberately independent from the dashboard card totals:
@@ -2993,7 +2995,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     widget.tabActivation.addListener(_tabActivationListener);
     // Restore the last successful snapshot immediately for fast rendering,
     // but do not hit the POS server while this page is hidden in IndexedStack.
-    _restoreCachedLive().then((_) => _restoreCachedTopItems());
+    _restoreCachedLive();
   }
 
   @override
