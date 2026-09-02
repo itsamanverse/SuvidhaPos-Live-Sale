@@ -1617,12 +1617,11 @@ class _DashboardPageState extends State<DashboardPage> {
     if (mounted) setState(() => loading = true);
 
     try {
-      // Dashboard/Sale is the ONLY Dashboard financial source. Always request
-      // the complete date range with ids=0, then filter its outlet rows locally.
-      // This avoids the POS bug where ids=<outlet> can return a partial/current
-      // value such as 25,412 instead of the selected-range 311,825.
+      // Dashboard/Sale is the ONLY Dashboard financial source.
+      // All Outlets uses ids=0. A selected outlet uses its own ids value so
+      // the POS returns the same outlet-scoped totals as the web POS filter.
       final aggregateResponse = await _loadDashboardFor(
-        '0',
+        selectedId == '0' ? '0' : selectedId,
         fromDate: requestFrom,
         toDate: requestTo,
       );
@@ -1683,22 +1682,24 @@ class _DashboardPageState extends State<DashboardPage> {
             ? [combinedSummaryMap]
             : aggregateSummaryRows;
       } else {
-        scopedSummary = apiOutletRows
-            .where((r) => rowMatchesOutlet(
-                  r,
-                  selectedId,
-                  outletName: selectedName,
-                ))
-            .toList();
-        // If outlets[] is absent but the summary itself carries outlet
-        // context, use that same Dashboard/Sale row. Never call an
-        // ids=<outlet> endpoint and never use live-table amounts as fallback.
+        // This response was explicitly requested with ids=<selected outlet>.
+        // A single unlabelled summary row is therefore authoritative for the
+        // selected outlet; do not discard it for missing outlet_id metadata.
+        scopedSummary = aggregateSummaryRows.isNotEmpty
+            ? aggregateSummaryRows
+            : summaryForResponseOutlet(
+                aggregateResponse,
+                selectedId,
+                outletName: selectedName,
+              );
         if (scopedSummary.isEmpty) {
-          scopedSummary = summaryForResponseOutlet(
-            aggregateResponse,
-            selectedId,
-            outletName: selectedName,
-          );
+          scopedSummary = apiOutletRows
+              .where((r) => rowMatchesOutlet(
+                    r,
+                    selectedId,
+                    outletName: selectedName,
+                  ))
+              .toList();
         }
       }
 
@@ -2054,16 +2055,21 @@ class _DashboardPageState extends State<DashboardPage> {
       );
       final items = _itemRowsFromResponse(response);
       final selectedId = loadedOutletId;
-      final selected = selectedId == '0'
-          ? items
-          : items.where((r) => rowMatchesOutlet(
-                r,
-                selectedId,
-                outletName: selectedOutletNameForDashboard,
-              )).toList();
-      // For a selected outlet, only rows that positively identify that outlet
-      // are safe. Never silently show another outlet's top items.
-      directItemRowsCache = selected;
+      if (selectedId == '0') {
+        directItemRowsCache = items;
+      } else {
+        final scoped = items.where((r) => rowMatchesOutlet(
+              r,
+              selectedId,
+              outletName: selectedOutletNameForDashboard,
+            )).toList();
+        // This endpoint accepts only billType=k. Some POS deployments return
+        // an already-scoped item list without outlet metadata. Keep that list
+        // instead of incorrectly rendering an empty Top Selling section.
+        final hasOutletContext = items.any((r) =>
+            outletIdOf(r).isNotEmpty || outletNameOf(r) != 'Outlet');
+        directItemRowsCache = scoped.isNotEmpty || hasOutletContext ? scoped : items;
+      }
       await OfflineStore.save('top_items_$selectedId', {'items': selected});
       if (mounted) setState(() {});
     } catch (_) {
@@ -4146,8 +4152,8 @@ class _ReportsPageState extends State<ReportsPage> {
         final json = await widget.api.dashboard(
           apiDate(full.$1),
           apiDate(full.$2),
-          '0',
-          useOutletFilter: false,
+          reportOutletId,
+          useOutletFilter: reportOutletId != '0',
         );
         final response = responseMap(json);
         Map<String, dynamic> previousResponse = {};
@@ -4157,8 +4163,8 @@ class _ReportsPageState extends State<ReportsPage> {
           final previousJson = await widget.api.dashboard(
             apiDate(previousFrom),
             apiDate(previousTo),
-            '0',
-            useOutletFilter: false,
+            reportOutletId,
+            useOutletFilter: reportOutletId != '0',
           );
           previousResponse = responseMap(previousJson);
         } catch (_) {}
@@ -4167,11 +4173,15 @@ class _ReportsPageState extends State<ReportsPage> {
           ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
           ['grosstotal', 'grosssale', 'nettotal', 'netsale', 'ordertotal'],
         );
-        final selected = summaryForOutlet(
-        rows,
-        reportOutletId,
-        outletName: widget.outletName,
-      );
+        final selected = reportOutletId == '0'
+            ? summaryForOutlet(rows, '0', outletName: widget.outletName)
+            : (rows.isNotEmpty
+                ? rows
+                : summaryForResponseOutlet(
+                    response,
+                    reportOutletId,
+                    outletName: widget.outletName,
+                  ));
         final nextMetrics = <String, num>{
           'Gross Sale': _sum(selected, 'grossTotal'),
           'Net Sale': _sum(selected, 'netTotal'),
@@ -4294,8 +4304,8 @@ class _ReportsPageState extends State<ReportsPage> {
       final json = await widget.api.dashboard(
         apiDate(range.from),
         apiDate(range.to),
-        '0',
-        useOutletFilter: false,
+        reportOutletId,
+        useOutletFilter: reportOutletId != '0',
       );
       final response = responseMap(json);
       final rows = rowsFromResponse(
@@ -4303,11 +4313,15 @@ class _ReportsPageState extends State<ReportsPage> {
         ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
         ['grosstotal', 'grosssale', 'nettotal', 'netsale', 'ordertotal'],
       );
-      final selected = summaryForOutlet(
-        rows,
-        reportOutletId,
-        outletName: widget.outletName,
-      );
+      final selected = reportOutletId == '0'
+          ? summaryForOutlet(rows, '0', outletName: widget.outletName)
+          : (rows.isNotEmpty
+              ? rows
+              : summaryForResponseOutlet(
+                  response,
+                  reportOutletId,
+                  outletName: widget.outletName,
+                ));
       if (selected.isNotEmpty) {
         return ChartPoint(range.label, _sum(selected, 'grossTotal'));
       }

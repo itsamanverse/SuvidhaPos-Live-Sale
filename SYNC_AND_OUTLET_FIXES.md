@@ -4,8 +4,7 @@
 - Live Tables performs one immediate sync when its tab is entered and then refreshes every 60 seconds while that tab remains active. It does not poll while hidden in the `IndexedStack`.
 - Reports performs one immediate **Daily** sync when its tab is entered. It does not auto-poll while the user remains on Reports. Weekly/Monthly/Yearly are fetched only when the user explicitly selects those tabs; returning to Reports starts a fresh Daily sync.
 - Repeated navigation clicks are treated as explicit activation events, so a Live Tables entry always gets a fresh sync.
-- Dashboard discovers outlet IDs and passes them to Live Tables so All Outlets can scope per-outlet requests safely.
-- Single-outlet Dashboard/Sale responses are treated as already scoped even when their summary row has no outlet ID.
+- Dashboard uses `ids=0` for All Outlets and `ids=<selected outlet>` for a single outlet, matching the web POS filter. The selected response is authoritative even when its summary row has no outlet ID. Dashboard discovers outlet IDs and passes them to Live Tables so All Outlets can scope per-outlet requests safely.
 - Gross Sale never falls back to Net Sale, Avg Revenue, or Order Count. A missing explicit Gross field remains `0` rather than displaying Net as Gross.
 - Top Selling Items are refreshed from `/Tablet/ListofItems/POS` with `billType=k` on Dashboard sync, with the last successful result retained for offline rendering.
 - GitHub Actions builds one universal release APK and uploads `SuvidhaPos-Live-Sale.apk`.

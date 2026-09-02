@@ -77,4 +77,22 @@ void main() {
       );
     }
   });
+  test('50x selected Dashboard/Sale scoped response is valid without outlet metadata', () {
+    for (var run = 0; run < 50; run++) {
+      final scoped = <Map<String, dynamic>>[
+        {
+          'grossTotal': 8569 + run,
+          'netTotal': 7754.26 + run,
+          'taxTotal': 814.87,
+          'discountTotal': 0,
+        },
+      ];
+      // A response fetched with ids=<selected outlet> is authoritative even
+      // when the POS omits outlet_id/outlet_name from its single summary row.
+      expect(scoped, hasLength(1));
+      expect(dashboardGrossValue(scoped.single), 8569 + run);
+      expect(number(scoped.single['netTotal']), 7754.26 + run);
+    }
+  });
+
 }
