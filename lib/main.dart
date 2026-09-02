@@ -128,8 +128,9 @@ class ApiService {
           'connection': freshConnection ? 'close' : 'keep-alive',
           if (freshConnection) 'cache-control': 'no-cache, no-store',
           if (freshConnection) 'pragma': 'no-cache',
-          if (freshConnection)
+          if (freshConnection) ...{
             'X-Request-ID': DateTime.now().microsecondsSinceEpoch.toString(),
+          },
           // DashboardLogin is deployed behind multiple POS gateway versions.
           // Keep all accepted API-key header aliases for compatibility.
           'Keys': cleanKey,
@@ -1543,11 +1544,15 @@ class _DashboardPageState extends State<DashboardPage> {
     );
     setState(() {
       data = response;
-      if (outletRows.isNotEmpty)
+      if (outletRows.isNotEmpty) {
         outletList = _mergeOutlets(outletList, outletRows);
-      if (summaryRows.isNotEmpty)
+      }
+      if (summaryRows.isNotEmpty) {
         outletList = _mergeOutlets(outletList, summaryRows);
-      if (liveRows.isNotEmpty) outletList = _mergeOutlets(outletList, liveRows);
+      }
+      if (liveRows.isNotEmpty) {
+        outletList = _mergeOutlets(outletList, liveRows);
+      }
     });
   }
 
@@ -1573,31 +1578,6 @@ class _DashboardPageState extends State<DashboardPage> {
           useOutletFilter: id != '0',
         )
         .timeout(const Duration(seconds: 20)));
-  }
-
-  List<Map<String, dynamic>> _attachOutletContext(
-      List<Map<String, dynamic>> rows, String outletId) {
-    final id = normalizedId(outletId);
-    if (id.isEmpty || id == '0') return rows;
-    var name = 'Outlet';
-    for (final outlet in outletList) {
-      if (outletIdOf(outlet) == id) {
-        name = outletNameOf(outlet);
-        break;
-      }
-    }
-    return rows.map((row) {
-      final copy = Map<String, dynamic>.from(row);
-      if (outletIdOf(copy).isEmpty) {
-        copy['outletId'] = id;
-        copy['outlet_id'] = id;
-      }
-      if (outletNameOf(copy) == 'Outlet' && name != 'Outlet') {
-        copy['outletName'] = name;
-        copy['outlet_name'] = name;
-      }
-      return copy;
-    }).toList();
   }
 
   Future<void> load({
@@ -1946,34 +1926,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return result;
   }
 
-  List<Map<String, dynamic>> _billRowsFromResponse(
-      Map<String, dynamic> response) {
-    return rowsFromResponse(
-      response,
-      const [
-        'liveSale',
-        'liveSales',
-        'liveTable',
-        'liveTables',
-        'recentSales',
-        'recentSale',
-        'bills',
-        'billList',
-        'sales',
-        'saleDetails',
-        'transactions',
-        'transactionList',
-      ],
-      const [
-        'billno',
-        'bill_no',
-        'bill_nofk',
-        'tableno',
-        'table_no',
-      ],
-    );
-  }
-
   List<Map<String, dynamic>> _itemRowsFromResponse(
       Map<String, dynamic> response) {
     final found = <Map<String, dynamic>>[];
@@ -2029,25 +1981,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return found;
   }
 
-  Future<void> _restoreCachedTopItems() async {
-    final cacheId = normalizedId(widget.selectedOutlet).isEmpty
-        ? '0'
-        : normalizedId(widget.selectedOutlet);
-    final cached = await OfflineStore.read('top_items_$cacheId');
-    if (!mounted || cached == null) return;
-    final rows = asRows(cached['items']);
-    if (rows.isEmpty) return;
-    final selected = cacheId == '0'
-        ? rows
-        : rows.where((r) => rowMatchesOutlet(
-              r,
-              cacheId,
-              outletName: selectedOutletNameForDashboard,
-            )).toList();
-    if (selected.isEmpty) return;
-    setState(() => directItemRowsCache = selected);
-  }
-
   Future<void> _loadTopItems() async {
     try {
       final response = responseMap(
@@ -2070,7 +2003,10 @@ class _DashboardPageState extends State<DashboardPage> {
             outletIdOf(r).isNotEmpty || outletNameOf(r) != 'Outlet');
         directItemRowsCache = scoped.isNotEmpty || hasOutletContext ? scoped : items;
       }
-      await OfflineStore.save('top_items_$selectedId', {'items': selected});
+      await OfflineStore.save(
+        'top_items_$selectedId',
+        {'items': List<Map<String, dynamic>>.from(directItemRowsCache)},
+      );
       if (mounted) setState(() {});
     } catch (_) {
       // Keep the last successful top-item snapshot during a transient outage.
@@ -2266,6 +2202,8 @@ class _DashboardPageState extends State<DashboardPage> {
         if (fetchedNet != 0) displayNet = fetchedNet;
       } catch (_) {}
     }
+
+    if (!mounted) return;
 
     if (displayGross == 0) {
       // Last fallback: recent bill rows are already scoped to the selected
@@ -3673,41 +3611,6 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             Text(money(value),
                 style: const TextStyle(fontWeight: FontWeight.w900)),
           ],
-        ),
-      );
-
-  Widget _countCard(String title, int value, IconData icon) => Expanded(
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 50),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFF111633),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withValues(alpha: .08)),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: 17),
-              const SizedBox(width: 5),
-              Expanded(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(title,
-                      maxLines: 1,
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700)),
-                ),
-              ),
-              const SizedBox(width: 4),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text('$value',
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w900)),
-              ),
-            ],
-          ),
         ),
       );
 
