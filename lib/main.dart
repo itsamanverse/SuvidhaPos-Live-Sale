@@ -16,6 +16,68 @@ const supportUrl = 'https://wa.me/918271718844';
 const appTitle = 'SuvidhaPos Live Sale';
 const refreshSeconds = 60;
 
+/// Returns the authoritative Gross Sale value used by Dashboard calculations.
+///
+/// This helper is intentionally public so invariant tests can validate the
+/// same Gross Sale rules used by the UI. It accepts either one normalized row,
+/// a list/iterable of rows, or a response map containing summary rows. Gross is
+/// never silently replaced with Net Sale.
+num dashboardGrossValue(dynamic source, [dynamic fallback]) {
+  Iterable<Map<String, dynamic>> rows;
+  if (source is Map<String, dynamic>) {
+    final direct = summaryRowsFromApi(source);
+    rows = direct.isNotEmpty ? direct : <Map<String, dynamic>>[source];
+  } else if (source is Map) {
+    final map = Map<String, dynamic>.from(source);
+    final direct = summaryRowsFromApi(map);
+    rows = direct.isNotEmpty ? direct : <Map<String, dynamic>>[map];
+  } else if (source is Iterable) {
+    rows = source
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row));
+  } else {
+    return fallback is num ? fallback : 0;
+  }
+
+  num sumAliases(List<Map<String, dynamic>> input, List<String> names) =>
+      input.fold<num>(0, (sum, row) => sum + number(field(row, names)));
+
+  final normalized = rows.map(normalizeApiMetricRow).toList();
+  final net = sumAliases(normalized, [
+    'netTotal', 'netSale', 'net_sale', 'netAmount', 'totalNet', 'net',
+    'net_total', 'total_net', 'netsale', 'nettotal',
+  ]);
+  final explicitGross = sumAliases(normalized, [
+    'grossTotal', 'grossSale', 'gross_sale', 'grossAmount', 'totalGross',
+    'gross', 'gross_total', 'total_gross', 'grossSales', 'gross_sales',
+    'billTotal', 'bill_total', 'totalBill', 'total_bill', 'subTotal',
+    'subtotal', 'sub_total', 'saleTotal', 'sale_total', 'billAmount',
+    'bill_amount', 'billamount',
+  ]);
+
+  if (explicitGross > 0 && (net == 0 || explicitGross + 0.01 >= net)) {
+    return explicitGross;
+  }
+
+  final avgRevenue = sumAliases(normalized, [
+    'avgRevenue', 'avg_revenue', 'avgRevenuePerBill',
+    'avg_revenue_per_bill', 'averageRevenuePerBill',
+    'average_revenue_per_bill', 'avgRevPerBill', 'avg_rev_per_bill',
+  ]);
+  final orderCount = sumAliases(normalized, [
+    'orderTotal', 'order_total', 'orderCount', 'order_count', 'orders',
+    'totalOrders', 'total_orders',
+  ]);
+  if (avgRevenue > 0 && orderCount > 0) {
+    final derived = avgRevenue * orderCount;
+    if (derived > 0 && (net == 0 || derived + 0.01 >= net)) {
+      return derived;
+    }
+  }
+
+  return fallback is num ? fallback : 0;
+}
+
 void main() => runApp(const SuvidhaPosLiveSaleApp());
 
 class SuvidhaPosLiveSaleApp extends StatelessWidget {
