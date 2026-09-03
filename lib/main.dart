@@ -45,9 +45,7 @@ num dashboardGrossValue(dynamic source) {
   return sumAliases(rows.toList(), [
     'grossTotal', 'grossSale', 'gross_sale', 'grossAmount', 'gross_amount',
     'totalGross', 'gross', 'gross_total', 'total_gross', 'grossSales',
-    'gross_sales', 'billTotal', 'bill_total', 'totalBill', 'total_bill',
-    'subTotal', 'subtotal', 'sub_total', 'saleTotal', 'sale_total',
-    'billAmount', 'bill_amount', 'billamount',
+    'gross_sales',
   ]);
 }
 
@@ -879,10 +877,20 @@ String tableDisplayNameOf(Map<String, dynamic> row) {
     'tableMaster', 'table_master', 'tableData', 'table_data',
   ];
   for (final key in nestedKeys) {
-    final nested = asMap(field(row, [key]));
+    final rawNested = field(row, [key]);
+    if (rawNested is String && rawNested.trim().isNotEmpty) {
+      return rawNested.trim();
+    }
+    final nested = asMap(rawNested);
     if (nested.isEmpty) continue;
     final name = stringValue(field(nested, nameKeys), '').trim();
     if (name.isNotEmpty) return name;
+  }
+
+  // A few POS versions expose the master table name directly as `table`.
+  final directTable = field(row, ['table']);
+  if (directTable is String && directTable.trim().isNotEmpty) {
+    return directTable.trim();
   }
 
   return '—';
@@ -1461,9 +1469,7 @@ Map<String, dynamic> normalizeApiMetricRow(Map<String, dynamic> row) {
   copy('grossTotal', [
     'grossTotal', 'gross_total', 'grosstotal', 'gross_sale', 'grossSale',
     'grossAmount', 'gross_amount', 'totalGross', 'gross', 'total_gross',
-    'grossSales', 'gross_sales', 'billTotal', 'bill_total',
-    'totalBill', 'total_bill', 'subTotal', 'subtotal', 'sub_total',
-    'saleTotal', 'sale_total', 'billAmount', 'bill_amount', 'billamount',
+    'grossSales', 'gross_sales',
   ]);
   copy('netTotal', ['net_sale', 'netSale', 'net_total', 'netTotal', 'netAmount', 'totalNet', 'net', 'total_net']);
   copy('taxTotal', [
@@ -1626,12 +1632,12 @@ class _DashboardPageState extends State<DashboardPage> {
     if (mounted) setState(() => loading = true);
 
     try {
-      // Dashboard/Sale is the single source of truth for every Dashboard
-      // metric, outlet bar, chart popup and Top Selling Items. One aggregate
-      // request is used so an outlet switch cannot accidentally mix a scoped
-      // partial response with the aggregate response.
+      // Dashboard/Sale is the single source of truth. All Outlets uses the
+      // API's combined (ids=0) response; a selected outlet uses the API's
+      // outlet-scoped response (ids=<selected>). Never filter an aggregate
+      // response and pretend it is the selected outlet's original response.
       final aggregateResponse = await _loadDashboardFor(
-        '0',
+        selectedId == '0' ? '0' : selectedId,
         fromDate: requestFrom,
         toDate: requestTo,
       );
@@ -1706,32 +1712,28 @@ class _DashboardPageState extends State<DashboardPage> {
         combinedLive.addAll(aggregateLiveRows);
         combinedItems.addAll(_itemRowsFromResponse(aggregateResponse));
       } else {
-        // Outlet selection is a pure filter over the same authoritative
-        // Dashboard/Sale aggregate response. This prevents the known issue
-        // where ids=<outlet> can return a smaller/current-day partial figure.
+        // This response was requested specifically for the selected outlet.
+        // Use its original summary/outlet row directly; do not substitute an
+        // aggregate row or derive values from other outlets.
         final selectedOutlet = allOutletRows.where(
-          (r) => normalizedId(outletIdOf(r)) == selectedId,
+          (r) => outletIdOf(r).isEmpty ||
+              normalizedId(outletIdOf(r)) == selectedId,
         ).toList();
         if (selectedOutlet.isNotEmpty) {
           combinedSummary.addAll(_attachOutletContext(selectedOutlet, selectedId));
         } else {
-          // If the API exposes the selected outlet as a summary row instead of
-          // an outlet-wise row, use only that API row. No other source is used.
-          combinedSummary.addAll(
-            aggregateSummaryRows.where(
-              (r) => rowMatchesOutlet(
-                r,
-                selectedId,
-                outletName: selectedOutletNameForDashboard,
-              ),
-            ),
-          );
+          combinedSummary.addAll(aggregateSummaryRows);
         }
 
-        for (final row in selectedOutlet) {
+        final performanceSource = selectedOutlet.isNotEmpty
+            ? selectedOutlet
+            : aggregateSummaryRows;
+        for (final row in performanceSource.take(1)) {
           performanceRows.add({
             'id': selectedId,
-            'name': outletNameOf(row),
+            'name': outletNameOf(row) == 'Outlet'
+                ? selectedOutletNameForDashboard
+                : outletNameOf(row),
             'gross': number(field(row, [
               'grossTotal', 'grossSale', 'gross_sale', 'grossAmount',
               'totalGross', 'gross', 'gross_total', 'total_gross',
@@ -1771,7 +1773,8 @@ class _DashboardPageState extends State<DashboardPage> {
         previousResponse = responseMap(await widget.api.dashboard(
           apiDate(previousFrom),
           apiDate(previousTo),
-          '0',
+          selectedId,
+          useOutletFilter: selectedId != '0',
         ).timeout(const Duration(seconds: 20)));
         previousLoadedOutletId = selectedId;
       } catch (_) {
@@ -2082,6 +2085,14 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   List<Map<String, dynamic>> topItems() {
+    // For a selected outlet, Dashboard/Sale was requested with that outlet ID,
+    // so its item rows are already scoped. Do not discard them merely because
+    // the POS omits outlet metadata on item rows. All Outlets uses the combined
+    // response as-is.
+    final selectedId = normalizedId(widget.selectedOutlet);
+    if (selectedId != '0' && loadedOutletId == selectedId) {
+      return _aggregateItemRows(directItemRowsCache);
+    }
     final selected = directItemRowsCache.where((r) => rowMatchesOutlet(
           r,
           widget.selectedOutlet,
@@ -2994,6 +3005,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     }
 
     final enriched = <Map<String, dynamic>>[];
+    Map<String, dynamic>? authoritativeOutletSummary;
     const concurrency = 4;
     final entries = unique.entries.toList();
     for (var offset = 0; offset < entries.length; offset += concurrency) {
@@ -3005,6 +3017,17 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
               .liveTable(entry.key.split('|').first, entry.key.split('|').last)
               .timeout(const Duration(seconds: 20)));
           final detailRow = _liveDetailSummaryRow(detail);
+          // LiveTableItem/Sale repeats outlet-level financial totals on each
+          // bill response. Keep the first successful original summary once per
+          // outlet; summing it once per bill was the reason Pending/Gross/Net
+          // were doubled. Table rows still retain every bill detail.
+          authoritativeOutletSummary ??= <String, dynamic>{
+            ...detailRow,
+            if (outletIdOf(detailRow).isEmpty)
+              'outlet_id': entry.key.split('|').first,
+            if (outletNameOf(detailRow) == 'Outlet')
+              'outlet_name': selectedOutletNameForLive(entry.key.split('|').first),
+          };
           final merged = <String, dynamic>{...base, ...detailRow};
           // Never lose the discovery identity when a detail response omits it.
           if (outletIdOf(merged).isEmpty) merged['outlet_id'] = entry.key.split('|').first;
@@ -3026,8 +3049,48 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
 
     return {
       'liveSale': enriched,
-      'saleSummary': enriched,
+      // Exactly one authoritative LiveTableItem/Sale summary per outlet.
+      // Never sum repeated outlet-level summary values across bills.
+      'saleSummary': authoritativeOutletSummary == null
+          ? <Map<String, dynamic>>[]
+          : <Map<String, dynamic>>[authoritativeOutletSummary!],
     };
+  }
+
+  String _findTableNameInResponse(Map<String, dynamic> response) {
+    const nameKeys = [
+      't_Name', 't_name', 'tName', 'TName', 'T_Name',
+      'tableName', 'table_name', 'TableName', 'Table_Name',
+      'tableDisplayName', 'table_display_name', 'displayTableName',
+      'tableLabel', 'table_label',
+    ];
+    String? found;
+    void walk(dynamic value) {
+      if (found != null) return;
+      if (value is Map) {
+        final row = Map<String, dynamic>.from(value);
+        final candidate = stringValue(field(row, nameKeys), '').trim();
+        if (candidate.isNotEmpty && candidate != '—' && candidate != '-') {
+          found = candidate;
+          return;
+        }
+        for (final child in row.values) {
+          if (child is Map || child is List) walk(child);
+          if (found != null) return;
+        }
+      } else if (value is List) {
+        for (final child in value) {
+          if (child is Map || child is List) walk(child);
+          if (found != null) return;
+        }
+      }
+    }
+    walk(response);
+    final directTable = field(response, ['table']);
+    if (found == null && directTable is String && directTable.trim().isNotEmpty) {
+      found = directTable.trim();
+    }
+    return found ?? '';
   }
 
   Map<String, dynamic> _liveDetailSummaryRow(Map<String, dynamic> response) {
@@ -3062,6 +3125,14 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       ],
     );
     if (detailRows.isNotEmpty) direct.addAll(detailRows.first);
+
+    // Preserve the POS master table name even when it lives in a different
+    // nested object/row than the financial summary. The UI label remains
+    // `Table No:` but its value must be the original name (TB1/WS1/etc.).
+    final tableName = _findTableNameInResponse(response);
+    if (tableName.isNotEmpty) {
+      direct['t_Name'] = tableName;
+    }
 
     // Some deployments return the financial fields at the root and the item
     // list under `itms`. Preserve root fields as the highest-level source.
