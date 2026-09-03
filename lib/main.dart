@@ -893,6 +893,48 @@ String tableDisplayNameOf(Map<String, dynamic> row) {
     return directTable.trim();
   }
 
+  // IMPORTANT: some POS deployments return the printable table identifier
+  // (for example `B1` / `WS1`) in `table_no`/`tableno` itself, while another
+  // field in the same response may contain the numeric internal table id.
+  // A non-numeric table_no is therefore an ORIGINAL POS table name and must
+  // be displayed as-is. We never convert a numeric id such as `1` into a
+  // guessed name.
+  final rawTableNo = stringValue(
+    field(row, [
+      'table_no', 'tableNo', 'tableno', 'Table_No', 'TableNo', 'table_no_fk',
+      'tableNoFk', 't_no', 'tNo',
+    ]),
+    '',
+  ).trim();
+  if (rawTableNo.isNotEmpty &&
+      rawTableNo != '—' &&
+      rawTableNo != '-' &&
+      rawTableNo != '0' &&
+      !RegExp(r'^\d+(?:\.0+)?$').hasMatch(rawTableNo)) {
+    return rawTableNo;
+  }
+
+  // Last chance: inspect arbitrary API keys rather than relying only on a
+  // fixed casing. POS installations have used variants such as
+  // `TableNameFK`, `tbl_name`, `tNameFk`, etc. Only values whose key clearly
+  // identifies a table name are accepted; numeric table ids are never used.
+  for (final entry in row.entries) {
+    final key = entry.key.toString().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if ((key.contains('tablename') ||
+            key == 'tname' ||
+            key == 'tblname' ||
+            key == 'tablelabel') &&
+        entry.value != null) {
+      final candidate = entry.value.toString().trim();
+      if (candidate.isNotEmpty &&
+          candidate != '—' &&
+          candidate != '-' &&
+          candidate != '0') {
+        return candidate;
+      }
+    }
+  }
+
   return '—';
 }
 

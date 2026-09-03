@@ -38,6 +38,9 @@ void main() {
       tableDisplayNameOf({'tableNo': 1, 'table': {'t_Name': 'TB1'}}),
       'TB1',
     );
+    expect(tableDisplayNameOf({'table_no': 'B1', 'tableNo': 1}), 'B1');
+    expect(tableDisplayNameOf({'tableno': 'WS1'}), 'WS1');
+    expect(tableDisplayNameOf({'tableNo': 1}), '—');
     expect(tableDisplayNameOf({'tableNo': 1}), '—');
   });
 
