@@ -1762,8 +1762,8 @@ class _DashboardPageState extends State<DashboardPage> {
       widget.onOutletChanged('0', 'All Outlets');
     }
     if (mounted) setState(() {
-      => loading = true);
-    }
+      loading = true;
+    });
 
     try {
       // Dashboard/Sale is the single source of truth. All Outlets uses the
@@ -3508,11 +3508,11 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             ? '0'
             : normalizedId(selectedOutletId));
     if (resetOutlet) setState(() {
-      => selectedOutletId = '0');
-    }
+      selectedOutletId = '0';
+    });
     if (mounted) setState(() {
-      => loading = true);
-    }
+      loading = true;
+    });
 
     try {
       final allLive = <Map<String, dynamic>>[];
@@ -3570,10 +3570,10 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       // Keep the last successful snapshot; the next 60-second sync retries.
     } finally {
       if (mounted) setState(() {
-        => loading = false);
+      loading = false;
+    });
       }
     }
-  }
 
   List<Map<String, dynamic>> get outlets {
     final map = <String, Map<String, dynamic>>{};
@@ -4360,10 +4360,10 @@ class _ReportsPageState extends State<ReportsPage> {
       }
     } finally {
       if (mounted && request == requestId) setState(() {
-        => loading = false);
+      loading = false;
+    });
       }
     }
-  }
 
   String _periodName() =>
       const ['Daily', 'Weekly', 'Monthly', 'Yearly'][period];
