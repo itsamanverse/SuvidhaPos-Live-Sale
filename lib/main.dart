@@ -1432,6 +1432,8 @@ class _DashboardShellState extends State<DashboardShell> {
   int index = 0;
   String selectedOutlet = '0';
   String selectedOutletName = 'All Outlets';
+  DateTime selectedFrom = DateTime.now();
+  DateTime selectedTo = DateTime.now();
   List<Map<String, dynamic>> availableOutlets = [];
   final ValueNotifier<int> syncSignal = ValueNotifier<int>(0);
 
@@ -1461,6 +1463,15 @@ class _DashboardShellState extends State<DashboardShell> {
         },
         onLiveSync: () async {
           syncSignal.value++;
+        },
+        onDateChanged: (from, to) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            selectedFrom = from;
+            selectedTo = to;
+          });
         },
         syncSignal: syncSignal,
         onOutletsChanged: (outlets) {
@@ -1526,6 +1537,7 @@ class DashboardPage extends StatefulWidget {
   final void Function(String id, String name) onOutletChanged;
   final void Function(List<Map<String, dynamic>> outlets)? onOutletsChanged;
   final Future<void> Function() onLiveSync;
+  final void Function(DateTime from, DateTime to)? onDateChanged;
   final ValueNotifier<int> syncSignal;
   final Future<void> Function() onLogout;
 
@@ -1537,6 +1549,7 @@ class DashboardPage extends StatefulWidget {
     required this.onOutletChanged,
     this.onOutletsChanged,
     required this.onLiveSync,
+    this.onDateChanged,
     required this.syncSignal,
     required this.onLogout,
   });
@@ -2021,6 +2034,7 @@ class _DashboardPageState extends State<DashboardPage> {
     // Invalidate any in-flight request and immediately remove the old range's
     // values. The next load snapshots the new range and repopulates the UI.
     ++requestId;
+    widget.onDateChanged?.call(from, to);
     if (mounted) {
       setState(() {
         data = {};
@@ -2657,8 +2671,8 @@ class _DashboardPageState extends State<DashboardPage> {
               onTap: loading
                   ? null
                   : () async {
-                      widget.onLiveSync();
-                      await load(resetOutlet: true);
+                      await load();
+                      await widget.onLiveSync();
                     },
               child: const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 2, vertical: 1),
@@ -3004,6 +3018,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   bool loading = false;
   Timer? timer;
   String selectedOutletId = '0';
+  int requestId = 0;
   late final VoidCallback _syncListener;
 
   @override
@@ -3047,13 +3062,14 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         oldWidget.outletName != widget.outletName ||
         oldWidget.availableOutlets.length != widget.availableOutlets.length) {
       selectedOutletId = newId;
-      load(resetOutlet: false);
+      load(resetOutlet: false, force: true);
     }
   }
 
   Future<void> _restoreCachedLive() async {
     final cacheId = normalizedId(widget.outletId).isEmpty ? '0' : normalizedId(widget.outletId);
-    final cached = await OfflineStore.read('live_$cacheId');
+    final cacheKey = 'live_$cacheId';
+    final cached = await OfflineStore.read(cacheKey);
     if (!mounted || cached == null) {
       return;
     }
@@ -3081,6 +3097,13 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     if (rows.isEmpty && summaries.isEmpty) {
       return;
     }
+    // A cache read may finish after the user changes outlet/date. Never let an
+    // old snapshot overwrite the newly selected filter.
+    final currentCacheId = normalizedId(widget.outletId).isEmpty ? '0' : normalizedId(widget.outletId);
+    final currentCacheKey = 'live_$currentCacheId';
+    if (cacheKey != currentCacheKey) {
+      return;
+    }
     final scopedRows = cacheId == '0'
         ? rows.where((row) => outletIdOf(row).isNotEmpty).toList()
         : rows
@@ -3106,8 +3129,67 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     });
   }
 
+  List<Map<String, dynamic>> _extractLiveItems(Map<String, dynamic> response) {
+    final found = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    final itemKeys = const [
+      'itms', 'items', 'itemList', 'item_list', 'itemDetails', 'item_details',
+      'saleItems', 'sale_items', 'billItems', 'bill_items', 'details',
+    ];
+
+    bool looksLikeItem(Map<String, dynamic> row) {
+      final keys = row.keys.map((e) => e.toString().toLowerCase()).toSet();
+      final hasName = keys.any((key) =>
+          key == 'i_name' || key == 'item_name' || key == 'itemname' ||
+          key == 'itemdesc' || key == 'item_desc' || key == 'productname' ||
+          key == 'product_name' || key == 'name' || key == 'description');
+      final hasQty = keys.any((key) =>
+          key == 'qty' || key == 'quantity' || key == 'qtyvalue' ||
+          key == 'qty_value' || key == 'item_qty' || key == 'itemqty');
+      return hasName && hasQty;
+    }
+
+    void walk(dynamic value) {
+      if (value is Map) {
+        final row = Map<String, dynamic>.from(value);
+        if (looksLikeItem(row)) {
+          final name = stringValue(
+            field(row, ['i_Name', 'i_name', 'item_name', 'itemName', 'name']),
+            'Item',
+          );
+          final qty = number(field(row, ['qty', 'quantity', 'qtyValue', 'qty_value']));
+          final amount = number(field(row, ['amount', 'item_amount', 'itemAmount', 'total']));
+          final code = stringValue(field(row, ['i_Code', 'item_code', 'itemCode', 'code']));
+          final signature = '$code|$name|$qty|$amount';
+          if (seen.add(signature)) {
+            found.add(row);
+          }
+        }
+        for (final entry in row.entries) {
+          if (itemKeys.any((key) => key.toLowerCase() == entry.key.toString().toLowerCase()) ||
+              entry.value is Map || entry.value is List) {
+            walk(entry.value);
+          }
+        }
+      } else if (value is List) {
+        for (final entry in value) {
+          if (entry is Map || entry is List) {
+            walk(entry);
+          }
+        }
+      }
+    }
+
+    walk(response);
+    return found;
+  }
+
   Future<Map<String, dynamic>> _loadLiveFor(String outletId) async {
-    final now = DateTime.now();
+    // Live Tables are independent of the Dashboard date filter. They always
+    // discover today's running/completed tables from the live POS state.
+    final today = DateTime.now();
+    final requestFrom = DateTime(today.year, today.month, today.day);
+    final requestTo = requestFrom;
     final id = normalizedId(outletId).isEmpty ? '0' : normalizedId(outletId);
 
     // Dashboard/Sale is discovery-only here: it gives us the bill numbers that
@@ -3115,8 +3197,8 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     // from Dashboard/Sale.
     final discovery = responseMap(await widget.api
         .dashboard(
-          apiDate(now),
-          apiDate(now),
+          apiDate(requestFrom),
+          apiDate(requestTo),
           id,
           useOutletFilter: id != '0',
         )
@@ -3183,6 +3265,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
               .liveTable(entry.key.split('|').first, entry.key.split('|').last)
               .timeout(const Duration(seconds: 20)));
           final detailRow = _liveDetailSummaryRow(detail);
+          final detailItems = _extractLiveItems(detail);
           // LiveTableItem/Sale repeats outlet-level financial totals on each
           // bill response. Keep the first successful original summary once per
           // outlet; summing it once per bill was the reason Pending/Gross/Net
@@ -3197,6 +3280,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             };
           }
           final merged = <String, dynamic>{...base, ...detailRow};
+          if (detailItems.isNotEmpty) {
+            merged['_items'] = detailItems;
+          }
           // Never lose the discovery identity when a detail response omits it.
           if (outletIdOf(merged).isEmpty) {
             merged['outlet_id'] = entry.key.split('|').first;
@@ -3506,25 +3592,31 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         ['grosstotal', 'grosssale', 'nettotal', 'netsale', 'ordertotal'],
       );
 
-  Future<void> load({bool resetOutlet = false}) async {
-    if (loading) {
+  Future<void> load({bool resetOutlet = false, bool force = false}) async {
+    if (loading && !force) {
       return;
     }
+    final request = ++requestId;
     final selected = resetOutlet
         ? '0'
         : (normalizedId(selectedOutletId).isEmpty
             ? '0'
             : normalizedId(selectedOutletId));
-    if (resetOutlet) setState(() {
-      selectedOutletId = '0';
-    });
-    if (mounted) setState(() {
-      loading = true;
-    });
+    if (resetOutlet) {
+      setState(() {
+        selectedOutletId = '0';
+      });
+    }
+    if (mounted) {
+      setState(() {
+        loading = true;
+      });
+    }
 
     try {
-      final allLive = <Map<String, dynamic>>[];
-      final allSummary = <Map<String, dynamic>>[];
+      final freshLive = <Map<String, dynamic>>[];
+      final freshSummary = <Map<String, dynamic>>[];
+      final failedOutlets = <String>{};
 
       if (selected == '0') {
         final ids = widget.availableOutlets
@@ -3533,55 +3625,107 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             .toSet()
             .toList();
         if (ids.isEmpty) {
-          final response = await _loadLiveFor('0');
-          allLive.addAll(_extractLive(response));
-          allSummary.addAll(_extractSummary(response));
+          try {
+            final response = await _loadLiveFor('0');
+            freshLive.addAll(_extractLive(response));
+            freshSummary.addAll(_extractSummary(response));
+          } catch (_) {
+            // Keep the previous snapshot if the discovery request fails.
+          }
         } else {
           final results = await Future.wait(ids.map((id) async {
             try {
               final response = await _loadLiveFor(id);
               return (
+                outletId: id,
+                success: true,
                 live: _scopeLiveRows(_extractLive(response), id),
                 summary: _scopeLiveRows(_extractSummary(response), id),
               );
             } catch (_) {
               return (
+                outletId: id,
+                success: false,
                 live: <Map<String, dynamic>>[],
                 summary: <Map<String, dynamic>>[],
               );
             }
           }));
           for (final result in results) {
-            allLive.addAll(result.live);
-            allSummary.addAll(result.summary);
+            if (!result.success) {
+              failedOutlets.add(result.outletId);
+              continue;
+            }
+            freshLive.addAll(result.live);
+            freshSummary.addAll(result.summary);
           }
         }
       } else {
-        final response = await _loadLiveFor(selected);
-        allLive.addAll(_scopeLiveRows(_extractLive(response), selected));
-        allSummary.addAll(_scopeLiveRows(_extractSummary(response), selected));
+        try {
+          final response = await _loadLiveFor(selected);
+          freshLive.addAll(_scopeLiveRows(_extractLive(response), selected));
+          freshSummary.addAll(_scopeLiveRows(_extractSummary(response), selected));
+        } catch (_) {
+          failedOutlets.add(selected);
+        }
       }
 
-      if (!mounted) {
+      if (!mounted || request != requestId) {
         return;
       }
-      setState(() {
-        live = allLive;
-        summaryRows = allSummary;
-        selectedOutletId = selected;
-      });
-      await OfflineStore.save('live_$selected', {
-        'liveSale': allLive,
-        'saleSummary': allSummary,
-      });
+
+      // Same-date refresh is stale-while-revalidate: a temporary network/API
+      // failure must never blank the screen. A successful outlet response can
+      // replace that outlet's previous snapshot, while failed outlets retain
+      // their last known-good data until the next sync succeeds.
+      List<Map<String, dynamic>> nextLive;
+      List<Map<String, dynamic>> nextSummary;
+      if (selected == '0') {
+        final keptLive = live.where((row) {
+          final id = outletIdOf(row);
+          return id.isNotEmpty && failedOutlets.contains(id);
+        }).toList();
+        final keptSummary = summaryRows.where((row) {
+          final id = outletIdOf(row);
+          return id.isNotEmpty && failedOutlets.contains(id);
+        }).toList();
+        nextLive = [...freshLive, ...keptLive];
+        nextSummary = [...freshSummary, ...keptSummary];
+      } else if (failedOutlets.contains(selected)) {
+        nextLive = List<Map<String, dynamic>>.from(live);
+        nextSummary = List<Map<String, dynamic>>.from(summaryRows);
+      } else {
+        nextLive = freshLive;
+        nextSummary = freshSummary;
+      }
+
+      // Do not replace a populated successful snapshot with an empty result
+      // caused by a transient all-bills detail failure. Keep the last good
+      // snapshot in that case and let the 60-second retry repair it.
+      final hasFreshData = nextLive.isNotEmpty || nextSummary.isNotEmpty;
+      final hadData = live.isNotEmpty || summaryRows.isNotEmpty;
+      if (hasFreshData || !hadData) {
+        setState(() {
+          live = nextLive;
+          summaryRows = nextSummary;
+          selectedOutletId = selected;
+        });
+        final cacheKey = 'live_$selected';
+        await OfflineStore.save(cacheKey, {
+          'liveSale': nextLive,
+          'saleSummary': nextSummary,
+        });
+      }
     } catch (_) {
-      // Keep the last successful snapshot; the next 60-second sync retries.
+      // Preserve the last successful snapshot. The next scheduled sync retries.
     } finally {
-      if (mounted) setState(() {
-      loading = false;
-    });
+      if (mounted && request == requestId) {
+        setState(() {
+          loading = false;
+        });
       }
     }
+  }
 
   List<Map<String, dynamic>> get outlets {
     final map = <String, Map<String, dynamic>>{};
@@ -3711,7 +3855,10 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       return;
     }
 
-    final future = widget.api.liveTable(outlet, bill).then(responseMap);
+    final cachedItems = asRows(field(table, ['_items', 'items', 'itms']));
+    final future = cachedItems.isNotEmpty
+        ? Future<Map<String, dynamic>>.value({'itms': cachedItems})
+        : widget.api.liveTable(outlet, bill).then(responseMap);
     Timer? autoClose;
     final dialogFuture = showDialog<void>(
       context: context,
@@ -3726,8 +3873,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
             future: future,
             builder: (context, snapshot) {
               final detail = snapshot.data;
-              final items =
-                  asRows(field(detail ?? {}, ['itms', 'items', 'itemList']));
+              final items = _extractLiveItems(detail ?? {});
               return ConstrainedBox(
                 constraints:
                     const BoxConstraints(maxWidth: 620, maxHeight: 720),
