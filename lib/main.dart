@@ -1757,20 +1757,24 @@ class _DashboardPageState extends State<DashboardPage> {
         // This response was requested specifically for the selected outlet.
         // Use its original summary/outlet row directly; do not substitute an
         // aggregate row or derive values from other outlets.
-        final selectedOutlet = allOutletRows.where(
-          (r) => outletIdOf(r).isEmpty ||
-              normalizedId(outletIdOf(r)) == selectedId,
-        ).toList();
-        if (selectedOutlet.isNotEmpty) {
-          combinedSummary.addAll(_attachOutletContext(selectedOutlet, selectedId));
-        } else {
-          combinedSummary.addAll(aggregateSummaryRows);
-        }
+        // For a selected outlet, the request itself is already outlet-scoped.
+        // The saleSummary row is the authoritative dashboard record and must
+        // drive BOTH the cards and the single outlet bar. Never prefer an
+        // outlet-wise/secondary row when the scoped summary is present.
+        final selectedSummaryRows = aggregateSummaryRows.isNotEmpty
+            ? _attachOutletContext(aggregateSummaryRows, selectedId)
+            : _attachOutletContext(
+                allOutletRows.where((r) =>
+                    outletIdOf(r).isEmpty || normalizedId(outletIdOf(r)) == selectedId),
+                selectedId,
+              );
 
-        final performanceSource = selectedOutlet.isNotEmpty
-            ? selectedOutlet
-            : aggregateSummaryRows;
-        for (final row in performanceSource.take(1)) {
+        combinedSummary.addAll(selectedSummaryRows);
+
+        // The chart and the Gross/Net cards intentionally share this exact
+        // normalized API row. A bar tap therefore cannot show a different
+        // Gross Sale than the card below it.
+        for (final row in selectedSummaryRows.take(1)) {
           performanceRows.add({
             'id': selectedId,
             'name': outletNameOf(row) == 'Outlet'
@@ -1778,11 +1782,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 : outletNameOf(row),
             'gross': number(field(row, [
               'grossTotal', 'grossSale', 'gross_sale', 'grossAmount',
-              'totalGross', 'gross', 'gross_total', 'total_gross',
+              'gross_amount', 'totalGross', 'gross', 'gross_total',
+              'total_gross', 'grossSales', 'gross_sales',
             ])),
             'net': number(field(row, [
-              'netTotal', 'netSale', 'net_sale', 'netAmount', 'totalNet',
-              'net', 'net_total', 'total_net',
+              'netTotal', 'netSale', 'net_sale', 'netAmount', 'net_amount',
+              'totalNet', 'net', 'net_total', 'total_net',
             ])),
           });
         }
@@ -2177,14 +2182,23 @@ class _DashboardPageState extends State<DashboardPage> {
     // `outletPerformanceRows` is built from outlet-scoped requests and is
     // therefore the authoritative chart source. `apiOutletRows` comes from
     // the aggregate response and may expose Gross Sale as zero/derived.
+    final selectedId = normalizedId(widget.selectedOutlet);
     final sourceRows = outletPerformanceRows.isNotEmpty
         ? outletPerformanceRows.map((r) => Map<String, dynamic>.from(r)).toList()
-        : apiOutletRows.map((r) => {
-            'id': outletIdOf(r),
-            'name': outletNameOf(r),
-            'gross': number(field(r, ['grossTotal', 'gross_sale', 'grossSale', 'gross_total'])),
-            'net': number(field(r, ['netTotal', 'net_sale', 'netSale', 'net_total'])),
-          }).toList();
+        : (selectedId == '0'
+            ? apiOutletRows.map((r) => {
+                'id': outletIdOf(r),
+                'name': outletNameOf(r),
+                'gross': number(field(r, [
+                  'grossTotal', 'gross_sale', 'grossSale', 'gross_total',
+                  'grossAmount', 'gross_amount', 'totalGross', 'gross',
+                ])),
+                'net': number(field(r, [
+                  'netTotal', 'net_sale', 'netSale', 'net_total',
+                  'netAmount', 'net_amount', 'totalNet', 'net',
+                ])),
+              }).toList()
+            : <Map<String, dynamic>>[]);
     final filteredRows = sourceRows
         .where((r) => widget.selectedOutlet == '0' ||
             normalizedId(r['id']) == normalizedId(widget.selectedOutlet))
@@ -3054,6 +3068,10 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       final batch = entries.skip(offset).take(concurrency).toList();
       final results = await Future.wait(batch.map((entry) async {
         final base = Map<String, dynamic>.from(entry.value);
+        final discoveryTableName = tableDisplayNameOf(base);
+        if (discoveryTableName != '—' && discoveryTableName.trim().isNotEmpty) {
+          base['t_Name'] = discoveryTableName;
+        }
         try {
           final detail = responseMap(await widget.api
               .liveTable(entry.key.split('|').first, entry.key.split('|').last)
@@ -3099,40 +3117,101 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     };
   }
 
-  String _findTableNameInResponse(Map<String, dynamic> response) {
+  String _findTableNameInResponse(
+    Map<String, dynamic> response, {
+    String billNo = '',
+  }) {
     const nameKeys = [
       't_Name', 't_name', 'tName', 'TName', 'T_Name',
       'tableName', 'table_name', 'TableName', 'Table_Name',
-      'tableDisplayName', 'table_display_name', 'displayTableName',
-      'tableLabel', 'table_label',
+      'table_name_fk', 'tableNameFk', 'tableDesc', 'table_desc',
+      'tableDescription', 'table_description', 'tableDisplayName',
+      'table_display_name', 'displayTableName', 'tableLabel', 'table_label',
+      'tblName', 'tbl_name', 'table_name_fk_value',
     ];
-    String? found;
-    void walk(dynamic value) {
-      if (found != null) return;
+    String best = '';
+    var bestScore = -1;
+
+    void inspect(dynamic value) {
       if (value is Map) {
         final row = Map<String, dynamic>.from(value);
         final candidate = stringValue(field(row, nameKeys), '').trim();
-        if (candidate.isNotEmpty && candidate != '—' && candidate != '-') {
-          found = candidate;
-          return;
+        if (candidate.isNotEmpty && candidate != '—' && candidate != '-' && candidate != '0') {
+          var score = 1;
+          final wantedBill = billNo.trim();
+          if (wantedBill.isNotEmpty && billNoOf(row).trim() == wantedBill) score += 20;
+          final rawTable = stringValue(field(row, [
+            'tableNo', 'tableno', 'table_No', 'table_no', 'TableNo', 'Table_No'
+          ]), '').trim();
+          if (rawTable.isNotEmpty && rawTable != '—' && rawTable != '-') score += 2;
+          if (score > bestScore) {
+            bestScore = score;
+            best = candidate;
+          }
         }
         for (final child in row.values) {
-          if (child is Map || child is List) walk(child);
-          if (found != null) return;
+          if (child is Map || child is List) inspect(child);
         }
       } else if (value is List) {
         for (final child in value) {
-          if (child is Map || child is List) walk(child);
-          if (found != null) return;
+          if (child is Map || child is List) inspect(child);
         }
       }
     }
-    walk(response);
+
+    inspect(response);
     final directTable = field(response, ['table']);
-    if (found == null && directTable is String && directTable.trim().isNotEmpty) {
-      found = directTable.trim();
+    if (best.isEmpty && directTable is String && directTable.trim().isNotEmpty) {
+      best = directTable.trim();
     }
-    return found ?? '';
+    return best;
+  }
+
+  Map<String, dynamic> _bestFinancialRow(Map<String, dynamic> response) {
+    const financialKeys = [
+      'grossTotal', 'grossSale', 'gross_sale', 'grosssale', 'gross_total',
+      'grossAmount', 'gross_amount', 'totalGross', 'gross',
+      'netTotal', 'netSale', 'net_sale', 'netsale', 'net_total',
+      'netAmount', 'net_amount', 'totalNet', 'net',
+      'pendingAmt', 'pendingAmount', 'pending_amt', 'pending_amount',
+      'unSatteledAmount', 'unSettledAmount', 'unsettledAmount',
+      'settlementPending', 'pendingSettlement',
+    ];
+    Map<String, dynamic> best = {};
+    var bestScore = -1;
+
+    void inspect(dynamic value) {
+      if (value is Map) {
+        final row = Map<String, dynamic>.from(value);
+        var score = 0;
+        for (final key in financialKeys) {
+          if (field(row, [key]) != null) score++;
+        }
+        final hasBill = billNoOf(row).trim().isNotEmpty;
+        final hasTable = tableNoOf(row).trim().isNotEmpty &&
+            tableNoOf(row).trim() != '—';
+        if (hasBill) score += 3;
+        if (hasTable) score += 2;
+        final hasGross = financialKeys.take(9).any((key) => field(row, [key]) != null);
+        final hasNet = financialKeys.skip(9).take(9).any((key) => field(row, [key]) != null);
+        final hasPending = financialKeys.skip(18).any((key) => field(row, [key]) != null);
+        if (hasGross && hasNet && hasPending) score += 10;
+        if (score > bestScore) {
+          bestScore = score;
+          best = row;
+        }
+        for (final child in row.values) {
+          if (child is Map || child is List) inspect(child);
+        }
+      } else if (value is List) {
+        for (final child in value) {
+          if (child is Map || child is List) inspect(child);
+        }
+      }
+    }
+
+    inspect(response);
+    return best;
   }
 
   Map<String, dynamic> _liveDetailSummaryRow(Map<String, dynamic> response) {
@@ -3166,12 +3245,17 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         'table_no'
       ],
     );
-    if (detailRows.isNotEmpty) direct.addAll(detailRows.first);
+    final bestFinancial = _bestFinancialRow(response);
+    if (bestFinancial.isNotEmpty) {
+      direct.addAll(bestFinancial);
+    } else if (detailRows.isNotEmpty) {
+      direct.addAll(detailRows.first);
+    }
 
     // Preserve the POS master table name even when it lives in a different
     // nested object/row than the financial summary. The UI label remains
     // `Table No:` but its value must be the original name (TB1/WS1/etc.).
-    final tableName = _findTableNameInResponse(response);
+    final tableName = _findTableNameInResponse(response, billNo: billNoOf(direct));
     if (tableName.isNotEmpty) {
       direct['t_Name'] = tableName;
     }
@@ -3204,13 +3288,28 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       'gross_sale',
       'grossTotal',
       'gross_total',
+      'grosssale',
+      'grossSales',
+      'gross_sales',
+      'grossAmount',
+      'gross_amount',
+      'totalGross',
+      'total_gross',
+      'gross',
       'netSale',
       'net_sale',
       'netTotal',
       'net_total',
+      'netsale',
+      'netAmount',
+      'net_amount',
+      'totalNet',
+      'total_net',
+      'net',
       'pendingAmt',
       'pendingAmount',
       'pending_amt',
+      'pending_amount',
       'unSatteledAmount',
       'unSettledAmount',
       'unsettledAmount',
