@@ -1633,7 +1633,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   List<Map<String, dynamic>> _attachOutletContext(
-      List<Map<String, dynamic>> rows, String outletId) {
+      Iterable<Map<String, dynamic>> rows, String outletId) {
     final id = normalizedId(outletId);
     if (id.isEmpty || id == '0') return rows;
     var name = 'Outlet';
@@ -1853,8 +1853,8 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   List<Map<String, dynamic>> _mergeOutlets(
-    List<Map<String, dynamic>> existing,
-    List<Map<String, dynamic>> incoming,
+    Iterable<Map<String, dynamic>> existing,
+    Iterable<Map<String, dynamic>> incoming,
   ) {
     final map = <String, Map<String, dynamic>>{};
     for (final row in [...existing, ...incoming]) {
@@ -3294,7 +3294,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   }
 
   List<Map<String, dynamic>> _scopeLiveRows(
-      List<Map<String, dynamic>> rows, String outletId) {
+      Iterable<Map<String, dynamic>> rows, String outletId) {
     final id = normalizedId(outletId);
     if (id.isEmpty || id == '0') {
       // In All Outlets mode never manufacture outlet ownership. A row without
