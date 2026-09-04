@@ -215,7 +215,9 @@ class ApiService {
           final retryableStatus = status == 408 ||
               status == 429 ||
               (status != null && status >= 500);
-          if (!retryableStatus) break;
+          if (!retryableStatus) {
+            break;
+          }
         }
 
         final retryable = e is TimeoutException ||
@@ -226,7 +228,9 @@ class ApiService {
                     e.statusCode == 429 ||
                     e.statusCode >= 500));
 
-        if (!retryable || attempt == maxAttempts - 1) break;
+        if (!retryable || attempt == maxAttempts - 1) {
+          break;
+        }
 
         // 400/401/403/422 never reach this branch. Network/5xx retries use
         // bounded exponential backoff with tiny jitter.
@@ -236,7 +240,9 @@ class ApiService {
           Duration(milliseconds: backoffMs + jitterMs),
         );
       } finally {
-        if (freshConnection) requestClient?.close();
+        if (freshConnection) {
+          requestClient.close();
+        }
       }
     }
 
@@ -289,7 +295,9 @@ class ApiService {
   }
 
   String _serverMessage(dynamic decoded) {
-    if (decoded is! Map) return '';
+    if (decoded is! Map) {
+      return '';
+    }
     final map = Map<String, dynamic>.from(decoded);
     return stringValue(
       field(map, const [
@@ -316,9 +324,13 @@ class ApiService {
   }
 
   bool _hasNullPayload(Map<String, dynamic> json) {
-    if (json.isEmpty) return true;
+    if (json.isEmpty) {
+      return true;
+    }
     for (final key in const ['response', 'data', 'result', 'payload']) {
-      if (json.containsKey(key) && json[key] == null) return true;
+      if (json.containsKey(key) && json[key] == null) {
+        return true;
+      }
     }
     return false;
   }
@@ -402,7 +414,9 @@ class ApiService {
             lower.contains('server error (401)') ||
             lower.contains('server error (403)');
 
-        if (!compatibilityFailure) rethrow;
+        if (!compatibilityFailure) {
+          rethrow;
+        }
 
         // Try the next gateway contract/connection mode. Do not sleep here:
         // these are deterministic contract fallbacks, not network retries.
@@ -573,14 +587,18 @@ class ApiService {
 }
 
 Map<String, dynamic> asMap(dynamic value) {
-  if (value is Map) return Map<String, dynamic>.from(value);
+  if (value is Map) {
+    return Map<String, dynamic>.from(value);
+  }
   return <String, dynamic>{};
 }
 
 Map<String, dynamic> responseMap(Map<String, dynamic> json) {
   for (final key in ['response', 'data', 'result', 'payload']) {
     final response = asMap(field(json, [key]));
-    if (response.isNotEmpty) return response;
+    if (response.isNotEmpty) {
+      return response;
+    }
   }
   return json;
 }
@@ -606,7 +624,9 @@ List<Map<String, dynamic>> rowsFromResponse(
   for (final key in keys) {
     final value = field(response, [key]);
     final rows = asRows(value);
-    if (rows.isNotEmpty) return rows;
+    if (rows.isNotEmpty) {
+      return rows;
+    }
   }
 
   bool looksLikeRow(Map<String, dynamic> row) {
@@ -614,7 +634,9 @@ List<Map<String, dynamic>> rowsFromResponse(
     return rowHints.any(lowered.contains);
   }
 
-  if (looksLikeRow(response)) return <Map<String, dynamic>>[response];
+  if (looksLikeRow(response)) {
+    return <Map<String, dynamic>>[response];
+  }
 
   final found = <Map<String, dynamic>>[];
   void walk(dynamic value) {
@@ -628,11 +650,15 @@ List<Map<String, dynamic>> rowsFromResponse(
         return;
       }
       for (final item in value) {
-        if (item is Map || item is List) walk(item);
+        if (item is Map || item is List) {
+          walk(item);
+        }
       }
     } else if (value is Map) {
       for (final item in value.values) {
-        if (item is Map || item is List) walk(item);
+        if (item is Map || item is List) {
+          walk(item);
+        }
       }
     }
   }
@@ -644,13 +670,17 @@ List<Map<String, dynamic>> rowsFromResponse(
 dynamic field(Map<String, dynamic> row, List<String> names,
     [dynamic fallback]) {
   for (final name in names) {
-    if (row.containsKey(name) && row[name] != null) return row[name];
+    if (row.containsKey(name) && row[name] != null) {
+      return row[name];
+    }
   }
   final lower = <String, dynamic>{};
   row.forEach((key, value) => lower[key.toLowerCase()] = value);
   for (final name in names) {
     final value = lower[name.toLowerCase()];
-    if (value != null) return value;
+    if (value != null) {
+      return value;
+    }
   }
   return fallback;
 }
@@ -664,8 +694,12 @@ bool success(dynamic value) {
 }
 
 num number(dynamic value) {
-  if (value == null) return 0;
-  if (value is num) return value;
+  if (value == null) {
+    return 0;
+  }
+  if (value is num) {
+    return value;
+  }
   final text = value.toString().replaceAll(RegExp(r'[^0-9.\-]'), '');
   return num.tryParse(text) ?? 0;
 }
@@ -723,9 +757,13 @@ class OfflineStore {
     try {
       final dir = await _directory();
       final file = File('${dir.path}/${_safe(key)}.json');
-      if (!await file.exists()) return null;
+      if (!await file.exists()) {
+        return null;
+      }
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! Map) return null;
+      if (decoded is! Map) {
+        return null;
+      }
       final data = decoded['data'];
       return data is Map ? Map<String, dynamic>.from(data) : null;
     } catch (_) {
@@ -736,7 +774,9 @@ class OfflineStore {
 
 String normalizedId(dynamic value) {
   final text = stringValue(value).trim();
-  if (text.isEmpty) return '';
+  if (text.isEmpty) {
+    return '';
+  }
   final parsed = num.tryParse(text);
   if (parsed != null && parsed == parsed.roundToDouble()) {
     return parsed.toInt().toString();
@@ -769,11 +809,17 @@ bool rowMatchesOutlet(
   String outletName = '',
 }) {
   final wantedId = normalizedId(outletId);
-  if (wantedId.isEmpty || wantedId == '0') return true;
+  if (wantedId.isEmpty || wantedId == '0') {
+    return true;
+  }
   final rowId = outletIdOf(row);
-  if (rowId == wantedId) return true;
+  if (rowId == wantedId) {
+    return true;
+  }
   final wantedName = outletName.trim().toLowerCase();
-  if (wantedName.isEmpty || wantedName == 'all outlets') return false;
+  if (wantedName.isEmpty || wantedName == 'all outlets') {
+    return false;
+  }
   final rowName = outletNameOf(row).trim().toLowerCase();
   return rowName != 'outlet' && rowName == wantedName;
 }
@@ -868,7 +914,9 @@ String tableDisplayNameOf(Map<String, dynamic> row) {
   ];
 
   final direct = stringValue(field(row, nameKeys), '').trim();
-  if (direct.isNotEmpty) return direct;
+  if (direct.isNotEmpty) {
+    return direct;
+  }
 
   // Some POS deployments wrap table metadata in a nested object. Preserve
   // the API's original table name without inventing or deriving one.
@@ -882,9 +930,13 @@ String tableDisplayNameOf(Map<String, dynamic> row) {
       return rawNested.trim();
     }
     final nested = asMap(rawNested);
-    if (nested.isEmpty) continue;
+    if (nested.isEmpty) {
+      continue;
+    }
     final name = stringValue(field(nested, nameKeys), '').trim();
-    if (name.isNotEmpty) return name;
+    if (name.isNotEmpty) {
+      return name;
+    }
   }
 
   // A few POS versions expose the master table name directly as `table`.
@@ -954,12 +1006,16 @@ List<Map<String, dynamic>> summaryForResponseOutlet(
         .where((row) => rowMatchesOutlet(row, wanted, outletName: outletName))
         .map(normalizeApiMetricRow)
         .toList();
-    if (matches.isNotEmpty) return matches;
+    if (matches.isNotEmpty) {
+      return matches;
+    }
   }
   final summaries = summaryRowsFromApi(response)
       .map(normalizeApiMetricRow)
       .toList();
-  if (wanted == '0' || wanted.isEmpty) return summaries;
+  if (wanted == '0' || wanted.isEmpty) {
+    return summaries;
+  }
   // A response with a single summary row is considered scoped only when it
   // carries matching outlet context. Never treat an unlabelled combined
   // summary as the selected outlet's data.
@@ -981,12 +1037,16 @@ List<Map<String, dynamic>> summaryForOutlet(
   }
 
   final idMatches = rows.where((r) => rowMatchesOutlet(r, wanted)).toList();
-  if (idMatches.isNotEmpty) return idMatches;
+  if (idMatches.isNotEmpty) {
+    return idMatches;
+  }
 
   final nameMatches = rows
       .where((r) => rowMatchesOutlet(r, wanted, outletName: outletName))
       .toList();
-  if (nameMatches.isNotEmpty) return nameMatches;
+  if (nameMatches.isNotEmpty) {
+    return nameMatches;
+  }
 
   return const <Map<String, dynamic>>[];
 }
@@ -1020,7 +1080,9 @@ class _AuthGateState extends State<AuthGate> {
     final id = (await storage.read(key: 'loginId'))?.trim();
     final pass = await storage.read(key: 'loginPassword');
     // Only Logout clears the stored session. Network/DNS outages never log out.
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       activationKey = key;
       loginId = id;
@@ -1031,14 +1093,18 @@ class _AuthGateState extends State<AuthGate> {
 
   Future<void> _saveKey(String value) async {
     final cleanKey = value.trim();
-    if (cleanKey.isEmpty) return;
+    if (cleanKey.isEmpty) {
+      return;
+    }
 
     // Changing the API key starts a completely fresh authentication state.
     // Do not let credentials from the previous key survive into the new key.
     await storage.write(key: 'activationKey', value: cleanKey);
     await storage.delete(key: 'loginId');
     await storage.delete(key: 'loginPassword');
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       activationKey = cleanKey;
       loginId = null;
@@ -1049,7 +1115,9 @@ class _AuthGateState extends State<AuthGate> {
   Future<void> _saveSession(String id, String pass) async {
     await storage.write(key: 'loginId', value: id);
     await storage.write(key: 'loginPassword', value: pass);
-    if (!mounted || activationKey == null) return;
+    if (!mounted || activationKey == null) {
+      return;
+    }
     setState(() {
       loginId = id;
       password = pass;
@@ -1059,7 +1127,9 @@ class _AuthGateState extends State<AuthGate> {
   Future<void> _logout() async {
     await storage.delete(key: 'loginId');
     await storage.delete(key: 'loginPassword');
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       loginId = null;
       password = null;
@@ -1137,7 +1207,9 @@ class _ActivationPageState extends State<ActivationPage> {
 
   Future<void> activateKey() async {
     final value = controller.text.trim();
-    if (value.isEmpty || busy) return;
+    if (value.isEmpty || busy) {
+      return;
+    }
     setState(() => busy = true);
     try {
       await widget.onDone(value);
@@ -1209,7 +1281,9 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> signIn() async {
     final id = userController.text.trim();
     final password = passwordController.text;
-    if (id.isEmpty || password.isEmpty || busy) return;
+    if (id.isEmpty || password.isEmpty || busy) {
+      return;
+    }
     setState(() {
       busy = true;
       error = null;
@@ -1387,7 +1461,9 @@ class _DashboardShellState extends State<DashboardShell> {
         },
         syncSignal: syncSignal,
         onOutletsChanged: (outlets) {
-          if (!mounted) return;
+          if (!mounted) {
+            return;
+          }
           setState(() {
             availableOutlets = List<Map<String, dynamic>>.from(outlets);
           });
@@ -1470,7 +1546,9 @@ class DashboardPage extends StatefulWidget {
 List<Map<String, dynamic>> outletRowsFromApi(Map<String, dynamic> response) {
   final direct = field(response, ['outlets', 'outletList', 'outletSummary', 'outletWise', 'outletwise']);
   final rows = asRows(direct);
-  if (rows.isNotEmpty) return rows;
+  if (rows.isNotEmpty) {
+    return rows;
+  }
   return rowsFromResponse(
     response,
     ['outlets', 'outletList', 'outletSummary', 'outletWise', 'outletwise'],
@@ -1484,7 +1562,9 @@ List<Map<String, dynamic>> summaryRowsFromApi(Map<String, dynamic> response) {
     return [Map<String, dynamic>.from(raw)];
   }
   final rows = asRows(raw);
-  if (rows.isNotEmpty) return rows;
+  if (rows.isNotEmpty) {
+    return rows;
+  }
   return rowsFromResponse(
     response,
     ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
@@ -1573,9 +1653,13 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _restoreCachedSnapshot({String? outletId}) async {
     final id = outletId ?? widget.selectedOutlet;
     final cached = await OfflineStore.read(_cacheKey(id));
-    if (!mounted || cached == null) return;
+    if (!mounted || cached == null) {
+      return;
+    }
     final response = responseMap(cached);
-    if (response.isEmpty) return;
+    if (response.isEmpty) {
+      return;
+    }
     final liveRows = rowsFromResponse(
       response,
       [
@@ -1604,7 +1688,9 @@ class _DashboardPageState extends State<DashboardPage> {
         outletList = _mergeOutlets(outletList, outletRows);
       if (summaryRows.isNotEmpty)
         outletList = _mergeOutlets(outletList, summaryRows);
-      if (liveRows.isNotEmpty) outletList = _mergeOutlets(outletList, liveRows);
+      if (liveRows.isNotEmpty) {
+        outletList = _mergeOutlets(outletList, liveRows);
+      }
     });
   }
 
@@ -1635,7 +1721,9 @@ class _DashboardPageState extends State<DashboardPage> {
   List<Map<String, dynamic>> _attachOutletContext(
       Iterable<Map<String, dynamic>> rows, String outletId) {
     final id = normalizedId(outletId);
-    if (id.isEmpty || id == '0') return rows;
+    if (id.isEmpty || id == '0') {
+      return rows.toList();
+    }
     var name = 'Outlet';
     for (final outlet in outletList) {
       if (outletIdOf(outlet) == id) {
@@ -1670,8 +1758,12 @@ class _DashboardPageState extends State<DashboardPage> {
         : (forceAllOutlets
             ? '0'
             : normalizedId(outletId ?? widget.selectedOutlet));
-    if (resetOutlet) widget.onOutletChanged('0', 'All Outlets');
-    if (mounted) setState(() => loading = true);
+    if (resetOutlet) {
+      widget.onOutletChanged('0', 'All Outlets');
+    }
+    if (mounted) setState(() {
+      => loading = true);
+    }
 
     try {
       // Dashboard/Sale is the single source of truth. All Outlets uses the
@@ -1717,7 +1809,9 @@ class _DashboardPageState extends State<DashboardPage> {
       apiCombinedSummary = combinedSummaryMap;
       widget.onOutletsChanged?.call(List<Map<String, dynamic>>.from(outletList));
 
-      if (!mounted || request != requestId) return;
+      if (!mounted || request != requestId) {
+        return;
+      }
 
       final combinedSummary = <Map<String, dynamic>>[];
       final combinedLive = <Map<String, dynamic>>[];
@@ -1736,7 +1830,9 @@ class _DashboardPageState extends State<DashboardPage> {
         // calculation from bills and no gross/net substitution.
         for (final row in allOutletRows) {
           final id = outletIdOf(row);
-          if (id.isEmpty || id == '0') continue;
+          if (id.isEmpty || id == '0') {
+            continue;
+          }
           performanceRows.add({
             'id': id,
             'name': outletNameOf(row),
@@ -1828,7 +1924,9 @@ class _DashboardPageState extends State<DashboardPage> {
         previousResponse = {};
       }
 
-      if (!mounted || request != requestId) return;
+      if (!mounted || request != requestId) {
+        return;
+      }
       loadedOutletId = selectedId;
       setState(() {
         data = responseForUi;
@@ -1859,7 +1957,9 @@ class _DashboardPageState extends State<DashboardPage> {
     final map = <String, Map<String, dynamic>>{};
     for (final row in [...existing, ...incoming]) {
       final id = outletIdOf(row);
-      if (id.isEmpty) continue;
+      if (id.isEmpty) {
+        continue;
+      }
       final name = outletNameOf(row);
       if (!map.containsKey(id)) {
         map[id] = {'outletId': id, 'outletName': name};
@@ -1893,7 +1993,9 @@ class _DashboardPageState extends State<DashboardPage> {
       firstDate: DateTime(2020),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    if (picked == null) return;
+    if (picked == null) {
+      return;
+    }
     if (isFrom && picked.isAfter(to)) {
       setState(() {
         from = picked;
@@ -1948,7 +2050,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
   List<Map<String, dynamic>> get selectedSummaries {
     final id = normalizedId(widget.selectedOutlet);
-    if (id != '0' && loadedOutletId == id) return summaries;
+    if (id != '0' && loadedOutletId == id) {
+      return summaries;
+    }
     return summaryForOutlet(
       summaries,
       widget.selectedOutlet,
@@ -1957,7 +2061,9 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   String get selectedOutletNameForDashboard {
-    if (normalizedId(widget.selectedOutlet) == '0') return 'All Outlets';
+    if (normalizedId(widget.selectedOutlet) == '0') {
+      return 'All Outlets';
+    }
     return outletList
             .where((o) => normalizedId(outletIdOf(o)) == normalizedId(widget.selectedOutlet))
             .map(outletNameOf)
@@ -2032,14 +2138,20 @@ class _DashboardPageState extends State<DashboardPage> {
           final qty = itemQtyOf(row);
           final amount = itemAmountOf(row);
           final signature = '$code|$name|$qty|$amount';
-          if (seen.add(signature)) found.add(row);
+          if (seen.add(signature)) {
+            found.add(row);
+          }
         }
         for (final value in row.values) {
-          if (value is Map || value is List) walk(value);
+          if (value is Map || value is List) {
+            walk(value);
+          }
         }
       } else if (value is List) {
         for (final item in value) {
-          if (item is Map || item is List) walk(item);
+          if (item is Map || item is List) {
+            walk(item);
+          }
         }
       }
     }
@@ -2051,7 +2163,9 @@ class _DashboardPageState extends State<DashboardPage> {
       'saleItems', 'sale_items',
     ]) {
       final value = field(response, [key]);
-      if (value != null) walk(value);
+      if (value != null) {
+        walk(value);
+      }
     }
     walk(response);
     return found;
@@ -2073,7 +2187,9 @@ class _DashboardPageState extends State<DashboardPage> {
           : (itemOutletName == 'Outlet' ? '' : itemOutletName.trim().toLowerCase());
       final itemKey = code.isNotEmpty ? code : name.trim().toLowerCase();
       final key = '$outletKey|$itemKey';
-      if (itemKey.isEmpty) continue;
+      if (itemKey.isEmpty) {
+        continue;
+      }
       final old = map[key] ?? {
         'outletId': itemOutletId,
         'outletName': itemOutletName,
@@ -2083,7 +2199,9 @@ class _DashboardPageState extends State<DashboardPage> {
       };
       old['qty'] = number(old['qty']) + itemQtyOf(item);
       old['amount'] = number(old['amount']) + itemAmountOf(item);
-      if (old['name'] == 'Item' && name.isNotEmpty) old['name'] = name;
+      if (old['name'] == 'Item' && name.isNotEmpty) {
+        old['name'] = name;
+      }
       if ((old['outletName'] == null || old['outletName'] == 'Outlet') &&
           itemOutletName != 'Outlet') {
         old['outletName'] = itemOutletName;
@@ -2443,7 +2561,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
   num _change(num current, num previous) {
     if (previous == 0) {
-      if (current == 0) return 0;
+      if (current == 0) {
+        return 0;
+      }
       return 100;
     }
     return ((current - previous) / previous) * 100;
@@ -2886,7 +3006,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     super.initState();
     selectedOutletId = widget.outletId.trim().isEmpty ? '0' : widget.outletId.trim();
     _syncListener = () {
-      if (mounted && !loading) load();
+      if (mounted && !loading) {
+        load();
+      }
     };
     widget.syncSignal.addListener(_syncListener);
     _restoreCachedLive().then((_) => load());
@@ -2927,9 +3049,13 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   Future<void> _restoreCachedLive() async {
     final cacheId = normalizedId(widget.outletId).isEmpty ? '0' : normalizedId(widget.outletId);
     final cached = await OfflineStore.read('live_$cacheId');
-    if (!mounted || cached == null) return;
+    if (!mounted || cached == null) {
+      return;
+    }
     final response = responseMap(cached);
-    if (response.isEmpty) return;
+    if (response.isEmpty) {
+      return;
+    }
     final rows = rowsFromResponse(
       response,
       [
@@ -2947,7 +3073,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
       ['grosstotal', 'grosssale', 'nettotal', 'netsale', 'ordertotal'],
     );
-    if (rows.isEmpty && summaries.isEmpty) return;
+    if (rows.isEmpty && summaries.isEmpty) {
+      return;
+    }
     final scopedRows = cacheId == '0'
         ? rows.where((row) => outletIdOf(row).isNotEmpty).toList()
         : rows
@@ -3008,7 +3136,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
 
     final scoped = candidates.where((row) {
       final bill = billNoOf(row).trim();
-      if (bill.isEmpty) return false;
+      if (bill.isEmpty) {
+        return false;
+      }
       return id == '0'
           ? outletIdOf(row).isNotEmpty
           : rowMatchesOutlet(
@@ -3021,7 +3151,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     final unique = <String, Map<String, dynamic>>{};
     for (final row in scoped) {
       final rowOutlet = outletIdOf(row).isEmpty ? id : outletIdOf(row);
-      if (rowOutlet.isEmpty || rowOutlet == '0') continue;
+      if (rowOutlet.isEmpty || rowOutlet == '0') {
+        continue;
+      }
       final bill = billNoOf(row).trim();
       unique['$rowOutlet|$bill'] = row;
     }
@@ -3056,8 +3188,12 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
           };
           final merged = <String, dynamic>{...base, ...detailRow};
           // Never lose the discovery identity when a detail response omits it.
-          if (outletIdOf(merged).isEmpty) merged['outlet_id'] = entry.key.split('|').first;
-          if (billNoOf(merged).isEmpty) merged['bill_no'] = entry.key.split('|').last;
+          if (outletIdOf(merged).isEmpty) {
+            merged['outlet_id'] = entry.key.split('|').first;
+          }
+          if (billNoOf(merged).isEmpty) {
+            merged['bill_no'] = entry.key.split('|').last;
+          }
           return merged;
         } catch (_) {
           // A failed bill-detail request is not allowed to turn a stale or
@@ -3105,22 +3241,30 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         if (candidate.isNotEmpty && candidate != '—' && candidate != '-' && candidate != '0') {
           var score = 1;
           final wantedBill = billNo.trim();
-          if (wantedBill.isNotEmpty && billNoOf(row).trim() == wantedBill) score += 20;
+          if (wantedBill.isNotEmpty && billNoOf(row).trim() == wantedBill) {
+            score += 20;
+          }
           final rawTable = stringValue(field(row, [
             'tableNo', 'tableno', 'table_No', 'table_no', 'TableNo', 'Table_No'
           ]), '').trim();
-          if (rawTable.isNotEmpty && rawTable != '—' && rawTable != '-') score += 2;
+          if (rawTable.isNotEmpty && rawTable != '—' && rawTable != '-') {
+            score += 2;
+          }
           if (score > bestScore) {
             bestScore = score;
             best = candidate;
           }
         }
         for (final child in row.values) {
-          if (child is Map || child is List) inspect(child);
+          if (child is Map || child is List) {
+            inspect(child);
+          }
         }
       } else if (value is List) {
         for (final child in value) {
-          if (child is Map || child is List) inspect(child);
+          if (child is Map || child is List) {
+            inspect(child);
+          }
         }
       }
     }
@@ -3151,27 +3295,39 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         final row = Map<String, dynamic>.from(value);
         var score = 0;
         for (final key in financialKeys) {
-          if (field(row, [key]) != null) score++;
+          if (field(row, [key]) != null) {
+            score++;
+          }
         }
         final hasBill = billNoOf(row).trim().isNotEmpty;
         final hasTable = tableNoOf(row).trim().isNotEmpty &&
             tableNoOf(row).trim() != '—';
-        if (hasBill) score += 3;
-        if (hasTable) score += 2;
+        if (hasBill) {
+          score += 3;
+        }
+        if (hasTable) {
+          score += 2;
+        }
         final hasGross = financialKeys.take(9).any((key) => field(row, [key]) != null);
         final hasNet = financialKeys.skip(9).take(9).any((key) => field(row, [key]) != null);
         final hasPending = financialKeys.skip(18).any((key) => field(row, [key]) != null);
-        if (hasGross && hasNet && hasPending) score += 10;
+        if (hasGross && hasNet && hasPending) {
+          score += 10;
+        }
         if (score > bestScore) {
           bestScore = score;
           best = row;
         }
         for (final child in row.values) {
-          if (child is Map || child is List) inspect(child);
+          if (child is Map || child is List) {
+            inspect(child);
+          }
         }
       } else if (value is List) {
         for (final child in value) {
-          if (child is Map || child is List) inspect(child);
+          if (child is Map || child is List) {
+            inspect(child);
+          }
         }
       }
     }
@@ -3288,7 +3444,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       'time'
     ]) {
       final value = field(response, [key]);
-      if (value != null) direct[key] = value;
+      if (value != null) {
+        direct[key] = value;
+      }
     }
     return direct;
   }
@@ -3316,7 +3474,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
 
   String selectedOutletNameForLive(String id) {
     for (final outlet in widget.availableOutlets) {
-      if (outletIdOf(outlet) == id) return outletNameOf(outlet);
+      if (outletIdOf(outlet) == id) {
+        return outletNameOf(outlet);
+      }
     }
     if (widget.outletId == id && widget.outletName.trim().isNotEmpty) {
       return widget.outletName.trim();
@@ -3339,14 +3499,20 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       );
 
   Future<void> load({bool resetOutlet = false}) async {
-    if (loading) return;
+    if (loading) {
+      return;
+    }
     final selected = resetOutlet
         ? '0'
         : (normalizedId(selectedOutletId).isEmpty
             ? '0'
             : normalizedId(selectedOutletId));
-    if (resetOutlet) setState(() => selectedOutletId = '0');
-    if (mounted) setState(() => loading = true);
+    if (resetOutlet) setState(() {
+      => selectedOutletId = '0');
+    }
+    if (mounted) setState(() {
+      => loading = true);
+    }
 
     try {
       final allLive = <Map<String, dynamic>>[];
@@ -3388,7 +3554,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
         allSummary.addAll(_scopeLiveRows(_extractSummary(response), selected));
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         live = allLive;
         summaryRows = allSummary;
@@ -3401,7 +3569,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     } catch (_) {
       // Keep the last successful snapshot; the next 60-second sync retries.
     } finally {
-      if (mounted) setState(() => loading = false);
+      if (mounted) setState(() {
+        => loading = false);
+      }
     }
   }
 
@@ -3409,7 +3579,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     final map = <String, Map<String, dynamic>>{};
     for (final row in [...live, ...summaryRows]) {
       final id = outletIdOf(row);
-      if (id.isEmpty) continue;
+      if (id.isEmpty) {
+        continue;
+      }
       final name = outletNameOf(row);
       final existing = map[id];
       map[id] = {
@@ -3421,7 +3593,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     }
     for (final outlet in widget.availableOutlets) {
       final id = outletIdOf(outlet);
-      if (id.isEmpty || id == '0') continue;
+      if (id.isEmpty || id == '0') {
+        continue;
+      }
       map[id] = {
         'outletId': id,
         'outletName': outletNameOf(outlet),
@@ -3440,9 +3614,13 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       // no table number, and must never be shown as Running Tables.
       return false;
     }
-    if (bill.isEmpty) return false;
+    if (bill.isEmpty) {
+      return false;
+    }
     final rawStatus = field(row, ['bill_status', 'billStatus', 'status']);
-    if (rawStatus == null) return true;
+    if (rawStatus == null) {
+      return true;
+    }
     final status = rawStatus.toString().trim().toLowerCase();
     return status == '0' || status == 'running' || status == 'open' ||
         status == 'active' || status == 'inprogress' || status == 'in progress';
@@ -3487,20 +3665,26 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
   num _sumRows(List<Map<String, dynamic>> rows, List<String> names) =>
       rows.fold<num>(0, (sum, row) => sum + number(field(row, names)));
 
-  num _metric(List<String> liveNames, List<String> summaryNames) {
+  num _metric(List<String> summaryNames) {
     // Live Tables financial cards have exactly one source of truth:
     // LiveTableItem/Sale response rows. Never fall back to table-card values,
     // Dashboard/Sale, Net Sale, Avg Revenue, Order Count, or any derived value.
     // All Outlets aggregates the original API field across outlet-scoped rows;
     // a single outlet uses only that outlet's original API rows.
-    if (selectedSummaries.isEmpty) return 0;
+    if (selectedSummaries.isEmpty) {
+      return 0;
+    }
     return _sumRows(selectedSummaries, summaryNames);
   }
 
   String get selectedOutletName {
-    if (selectedOutletId == '0') return 'All Outlets';
+    if (selectedOutletId == '0') {
+      return 'All Outlets';
+    }
     for (final outlet in outlets) {
-      if (outletIdOf(outlet) == selectedOutletId) return outletNameOf(outlet);
+      if (outletIdOf(outlet) == selectedOutletId) {
+        return outletNameOf(outlet);
+      }
     }
     return widget.outletName.isEmpty ? 'Outlet' : widget.outletName;
   }
@@ -3515,7 +3699,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     final outlet =
         outletIdOf(table).isEmpty ? selectedOutletId : outletIdOf(table);
     final bill = billNoOf(table);
-    if (bill.isEmpty || outlet.isEmpty || outlet == '0') return;
+    if (bill.isEmpty || outlet.isEmpty || outlet == '0') {
+      return;
+    }
 
     final future = widget.api.liveTable(outlet, bill).then(responseMap);
     Timer? autoClose;
@@ -3785,17 +3971,11 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     // All financial cards in this page are calculated only from successful
     // LiveTableItem/Sale responses. Dashboard/Sale is never a financial
     // fallback for Live Tables.
-    final gross = _metric(
-      ['grossSale', 'gross_sale', 'grossTotal', 'gross_total', 'grossAmount', 'gross_amount', 'totalGross', 'total_gross'],
-      ['grossTotal', 'grossSale', 'gross_sale', 'grossAmount', 'gross_amount', 'totalGross', 'total_gross'],
+    final gross = _metric(['grossTotal', 'grossSale', 'gross_sale', 'grossAmount', 'gross_amount', 'totalGross', 'total_gross'],
     );
-    final net = _metric(
-      ['netSale', 'net_sale', 'netTotal', 'net_total', 'netAmount', 'net_amount', 'totalNet', 'total_net'],
-      ['netTotal', 'netSale', 'net_sale', 'netAmount', 'net_amount', 'totalNet', 'total_net'],
+    final net = _metric(['netTotal', 'netSale', 'net_sale', 'netAmount', 'net_amount', 'totalNet', 'total_net'],
     );
-    final pending = _metric(
-      ['pendingAmt', 'pendingAmount', 'pending_amt', 'unSatteledAmount'],
-      [
+    final pending = _metric([
         'unSatteledAmount',
         'unSettledAmount',
         'unsettledAmount',
@@ -3872,7 +4052,9 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
                         )),
                   ],
                   onChanged: (value) async {
-                    if (value == null || value == selectedOutletId) return;
+                    if (value == null || value == selectedOutletId) {
+                      return;
+                    }
                     setState(() => selectedOutletId = value);
                     await load();
                   },
@@ -4056,7 +4238,9 @@ class _ReportsPageState extends State<ReportsPage> {
   }
 
   Future<void> load() async {
-    if (loading) return;
+    if (loading) {
+      return;
+    }
     final request = ++requestId;
     if (mounted) {
       setState(() {
@@ -4070,11 +4254,15 @@ class _ReportsPageState extends State<ReportsPage> {
       const concurrency = 3;
       for (var offset = 0; offset < ranges.length; offset += concurrency) {
         final batch = ranges.skip(offset).take(concurrency).toList();
-        if (!mounted || request != requestId) return;
+        if (!mounted || request != requestId) {
+          return;
+        }
         setState(() => processingText =
             'Syncing ${_periodName()} · ${offset + 1}-${offset + batch.length}/${ranges.length}');
         final batchResults = await Future.wait(batch.map(_fetchRange));
-        if (!mounted || request != requestId) return;
+        if (!mounted || request != requestId) {
+          return;
+        }
         results.addAll(batchResults);
         setState(() {
           points = List<ChartPoint>.from(results);
@@ -4171,7 +4359,9 @@ class _ReportsPageState extends State<ReportsPage> {
             () => processingText = 'Offline · showing last available data');
       }
     } finally {
-      if (mounted && request == requestId) setState(() => loading = false);
+      if (mounted && request == requestId) setState(() {
+        => loading = false);
+      }
     }
   }
 
@@ -4297,7 +4487,9 @@ class _ReportsPageState extends State<ReportsPage> {
                               child: Center(child: Text(labels[i]))),
                           selected: period == i,
                           onSelected: (_) {
-                            if (period == i || loading) return;
+                            if (period == i || loading) {
+                              return;
+                            }
                             setState(() => period = i);
                             unawaited(load());
                           },

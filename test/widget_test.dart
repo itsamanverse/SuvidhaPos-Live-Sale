@@ -38,7 +38,7 @@ void main() {
   test('same-day previous-week percentage matches expected decrease', () {
     const current = 10;
     const previous = 25;
-    final change = ((current - previous) / previous) * 100;
+    const change = ((current - previous) / previous) * 100;
     expect(change, closeTo(-60, 0.0001));
   });
 }
