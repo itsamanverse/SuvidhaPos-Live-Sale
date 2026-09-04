@@ -107,6 +107,92 @@ class _HttpStatusException implements Exception {
   const _HttpStatusException(this.statusCode, this.message);
 }
 
+String _friendlyLoginReason(
+  Map<String, dynamic> root,
+  Map<String, dynamic> response,
+  String serverMessage,
+) {
+  final values = <String>[];
+
+  void collect(dynamic value) {
+    if (value == null) return;
+    if (value is String || value is num || value is bool) {
+      values.add(value.toString());
+      return;
+    }
+    if (value is Map) {
+      for (final entry in value.entries) {
+        final key = entry.key.toString().toLowerCase();
+        final valueText = entry.value?.toString() ?? '';
+        if (key.contains('message') ||
+            key.contains('error') ||
+            key.contains('reason') ||
+            key.contains('status') ||
+            key.contains('user') ||
+            key.contains('login') ||
+            key.contains('password') ||
+            key.contains('credential')) {
+          values.add(valueText);
+        }
+        if (entry.value is Map || entry.value is List) {
+          collect(entry.value);
+        }
+      }
+      return;
+    }
+    if (value is List) {
+      for (final item in value) {
+        collect(item);
+      }
+    }
+  }
+
+  collect(root);
+  collect(response);
+  values.add(serverMessage);
+  final text = values.join(' ').toLowerCase();
+
+  final passwordWrong = text.contains('wrong password') ||
+      text.contains('incorrect password') ||
+      text.contains('invalid password') ||
+      text.contains('password is wrong') ||
+      text.contains('password wrong') ||
+      text.contains('password does not match') ||
+      text.contains('password mismatch') ||
+      text.contains('password incorrect') ||
+      text.contains('incorrect pass') ||
+      text.contains('invalid pass');
+  if (passwordWrong) {
+    return 'Password is wrong. Please check your password and try again.';
+  }
+
+  final userWrong = text.contains('user not found') ||
+      text.contains('username not found') ||
+      text.contains('login id not found') ||
+      text.contains('loginid not found') ||
+      text.contains('invalid username') ||
+      text.contains('invalid user') ||
+      text.contains('invalid login id') ||
+      text.contains('user does not exist') ||
+      text.contains('username does not exist') ||
+      text.contains('unknown user') ||
+      text.contains('user not available');
+  if (userWrong) {
+    return 'User ID is wrong. Please check your User ID and try again.';
+  }
+
+  if (text.contains('invalid credential') ||
+      text.contains('incorrect credential') ||
+      text.contains('login failed') ||
+      text.contains('authentication failed') ||
+      text.contains('unauthorized') ||
+      text.contains('wrong credentials')) {
+    return 'User ID or password is incorrect. Please check both and try again.';
+  }
+
+  return 'Login failed. Please check your User ID and password and try again.';
+}
+
 class ApiService {
   final String key;
   const ApiService(this.key);
@@ -134,7 +220,7 @@ class ApiService {
     bool freshConnection = false,
     bool legacyLoginHeaders = false,
     bool includeApiKeyFields = true,
-    Duration requestTimeout = const Duration(seconds: 20),
+    Duration requestTimeout = const Duration(seconds: 12),
   }) async {
     final cleanKey = key.trim();
     if (cleanKey.isEmpty) {
@@ -142,7 +228,7 @@ class ApiService {
     }
 
     Object? lastError;
-    const maxAttempts = 3;
+    const maxAttempts = 2;
 
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       http.Client? requestClient;
@@ -234,7 +320,7 @@ class ApiService {
 
         // 400/401/403/422 never reach this branch. Network/5xx retries use
         // bounded exponential backoff with tiny jitter.
-        final backoffMs = 400 * (1 << attempt);
+        final backoffMs = 250 * (1 << attempt);
         final jitterMs = (attempt * 113) % 180;
         await Future<void>.delayed(
           Duration(milliseconds: backoffMs + jitterMs),
@@ -345,120 +431,26 @@ class ApiService {
       throw Exception('Login ID and password are required.');
     }
 
-    // The POS gateway has existed in multiple compatible versions. A valid
-    // API key must work repeatedly after Logout and after changing the key.
+    // Login is intentionally a SINGLE request. Do not run compatibility
+    // fallbacks here: a wrong username/password commonly returns HTTP 400,
+    // and retrying that response can turn one bad login into several requests,
+    // trigger gateway/rate-limit protection, and cause the next real login to
+    // appear as "Server error (400)".
     //
-    // Login therefore uses a bounded compatibility matrix:
-    //   1) fresh connection + full legacy body/header aliases
-    //   2) pooled connection + full legacy body/header aliases
-    //   3) fresh connection + header-only aliases
-    //   4) pooled connection + header-only aliases
-    //
-    // Only transport/contract failures (400/401/403/key-rejected) enter the
-    // compatibility matrix. Credential errors are NOT converted into API-key
-    // errors; the final server response is mapped to a friendly reason.
-    final attempts = <({
-      bool freshConnection,
-      bool legacyLoginHeaders,
-      bool includeApiKeyFields,
-    })>[
-      (
-        freshConnection: true,
-        legacyLoginHeaders: false,
-        includeApiKeyFields: true,
-      ),
-      (
-        freshConnection: false,
-        legacyLoginHeaders: false,
-        includeApiKeyFields: true,
-      ),
-      (
-        freshConnection: true,
-        legacyLoginHeaders: true,
-        includeApiKeyFields: false,
-      ),
-      (
-        freshConnection: false,
-        legacyLoginHeaders: true,
-        includeApiKeyFields: false,
-      ),
-    ];
+    // The request still sends the currently supported API-key aliases in the
+    // normal post() contract, so a valid key is not dependent on a retry
+    // matrix. Only transient transport/5xx errors are retried by post().
+    final json = await post(
+      '/DashboardLogin',
+      {
+        'LoginID': cleanId,
+        'Password': cleanPassword,
+      },
+      allowEmptyPayload: true,
+      freshConnection: true,
+      requestTimeout: const Duration(seconds: 12),
+    );
 
-    Object? lastError;
-    Map<String, dynamic>? successful;
-
-    for (final attempt in attempts) {
-      try {
-        successful = await post(
-          '/DashboardLogin',
-          {
-            'LoginID': cleanId,
-            'Password': cleanPassword,
-          },
-          allowEmptyPayload: true,
-          freshConnection: attempt.freshConnection,
-          legacyLoginHeaders: attempt.legacyLoginHeaders,
-          includeApiKeyFields: attempt.includeApiKeyFields,
-          requestTimeout: const Duration(seconds: 30),
-        );
-        break;
-      } catch (e) {
-        lastError = e;
-        final lower = e.toString().toLowerCase();
-
-        final compatibilityFailure =
-            e is _ApiKeyRejected ||
-            (e is _HttpStatusException &&
-                (e.statusCode == 400 ||
-                    e.statusCode == 401 ||
-                    e.statusCode == 403)) ||
-            lower.contains('api key rejected') ||
-            lower.contains('server error (400)') ||
-            lower.contains('server error (401)') ||
-            lower.contains('server error (403)');
-
-        if (!compatibilityFailure) {
-          rethrow;
-        }
-
-        // Try the next gateway contract/connection mode. Do not sleep here:
-        // these are deterministic contract fallbacks, not network retries.
-      }
-    }
-
-    if (successful == null) {
-      if (lastError is _ApiKeyRejected) {
-        throw Exception(
-          'API key rejected by server. Please verify the API key in Change API Key.',
-        );
-      }
-      if (lastError is _HttpStatusException) {
-        final error = lastError;
-        final serverText = error.message.toLowerCase();
-        if (serverText.contains('api key') ||
-            serverText.contains('api-key') ||
-            serverText.contains('key rejected') ||
-            serverText.contains('invalid key')) {
-          throw Exception(
-            'API key rejected by server. Please verify the API key in Change API Key.',
-          );
-        }
-        if (error.statusCode == 400) {
-          throw Exception(
-            'Login request was not accepted. Please check the Login ID and password.',
-          );
-        }
-        if (error.statusCode == 401 || error.statusCode == 403) {
-          throw Exception('Username or password is incorrect.');
-        }
-      }
-      throw Exception(
-        lastError?.toString().replaceFirst('Exception: ', '') ??
-            'Unable to sign in. Please try again.',
-      );
-    }
-
-    final json = successful;
     final response = responseMap(json);
     final status = field(response, ['status', 'success', 'isSuccess', 'ok']) ??
         field(json, ['status', 'success', 'isSuccess', 'ok']);
@@ -511,54 +503,6 @@ class ApiService {
             combinedText.contains('username not found'))) {
       throw Exception(_friendlyLoginReason(json, response, message));
     }
-  }
-
-  String _friendlyLoginReason(
-    Map<String, dynamic> json,
-    Map<String, dynamic> response,
-    String serverMessage,
-  ) {
-    final raw = jsonEncode(json).toLowerCase();
-    final text = '$serverMessage $raw'.toLowerCase();
-
-    if (text.contains('user not found') ||
-        text.contains('username not found') ||
-        text.contains('login id not found') ||
-        text.contains('user does not exist') ||
-        text.contains('user unavailable') ||
-        text.contains('user not available')) {
-      return 'User not available. Please check the Login ID.';
-    }
-    if (text.contains('password incorrect') ||
-        text.contains('incorrect password') ||
-        text.contains('wrong password') ||
-        text.contains('invalid password')) {
-      return 'Wrong password. Please check your password.';
-    }
-    if (text.contains('invalid credential') ||
-        text.contains('invalid login') ||
-        text.contains('wrong credential') ||
-        text.contains('wrong login') ||
-        text.contains('authentication failed') ||
-        text.contains('auth failed') ||
-        text.contains('credentials are not valid')) {
-      return 'Username or password is incorrect.';
-    }
-    if (text.contains('login id') &&
-        (text.contains('invalid') ||
-            text.contains('incorrect') ||
-            text.contains('wrong'))) {
-      return 'User not available. Please check the Login ID.';
-    }
-    if (text.contains('api key') &&
-        (text.contains('invalid') || text.contains('reject'))) {
-      return 'API key rejected. Please verify the API key in Change API Key.';
-    }
-    if (serverMessage.trim().isNotEmpty &&
-        !serverMessage.toLowerCase().contains('login failed')) {
-      return serverMessage.trim();
-    }
-    return 'Username or password is incorrect.';
   }
 
   Future<Map<String, dynamic>> dashboard(
