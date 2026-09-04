@@ -2104,11 +2104,13 @@ class _DashboardPageState extends State<DashboardPage> {
     if (selectedId != '0' && loadedOutletId == selectedId) {
       return _aggregateItemRows(directItemRowsCache);
     }
-    final selected = directItemRowsCache.where((r) => rowMatchesOutlet(
-          r,
-          widget.selectedOutlet,
-          outletName: selectedOutletNameForDashboard,
-        ));
+    final selected = directItemRowsCache
+        .where((r) => rowMatchesOutlet(
+              r,
+              widget.selectedOutlet,
+              outletName: selectedOutletNameForDashboard,
+            ))
+        .toList();
     return _aggregateItemRows(selected);
   }
 
