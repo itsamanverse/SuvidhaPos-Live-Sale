@@ -241,7 +241,10 @@ class ApiService {
         );
       } finally {
         if (freshConnection) {
-          requestClient.close();
+          final client = requestClient;
+          if (client != null) {
+            client.close();
+          }
         }
       }
     }
@@ -2692,7 +2695,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     letterSpacing: 1.5)),
             const SizedBox(height: 4),
             const Text('Dashboard',
-                style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900)),
+                style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w900)),
             Text('Welcome, ${widget.loginId} · $outletName',
                 style: const TextStyle(color: Colors.white70)),
             const SizedBox(height: 16),
