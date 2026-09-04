@@ -104,94 +104,16 @@ class _ApiKeyRejected implements Exception {}
 class _HttpStatusException implements Exception {
   final int statusCode;
   final String message;
-  const _HttpStatusException(this.statusCode, this.message);
+  final String rawBody;
+  final dynamic decoded;
+  const _HttpStatusException(
+    this.statusCode,
+    this.message, {
+    this.rawBody = '',
+    this.decoded,
+  });
 }
 
-String _friendlyLoginReason(
-  Map<String, dynamic> root,
-  Map<String, dynamic> response,
-  String serverMessage,
-) {
-  final values = <String>[];
-
-  void collect(dynamic value) {
-    if (value == null) return;
-    if (value is String || value is num || value is bool) {
-      values.add(value.toString());
-      return;
-    }
-    if (value is Map) {
-      for (final entry in value.entries) {
-        final key = entry.key.toString().toLowerCase();
-        final valueText = entry.value?.toString() ?? '';
-        if (key.contains('message') ||
-            key.contains('error') ||
-            key.contains('reason') ||
-            key.contains('status') ||
-            key.contains('user') ||
-            key.contains('login') ||
-            key.contains('password') ||
-            key.contains('credential')) {
-          values.add(valueText);
-        }
-        if (entry.value is Map || entry.value is List) {
-          collect(entry.value);
-        }
-      }
-      return;
-    }
-    if (value is List) {
-      for (final item in value) {
-        collect(item);
-      }
-    }
-  }
-
-  collect(root);
-  collect(response);
-  values.add(serverMessage);
-  final text = values.join(' ').toLowerCase();
-
-  final passwordWrong = text.contains('wrong password') ||
-      text.contains('incorrect password') ||
-      text.contains('invalid password') ||
-      text.contains('password is wrong') ||
-      text.contains('password wrong') ||
-      text.contains('password does not match') ||
-      text.contains('password mismatch') ||
-      text.contains('password incorrect') ||
-      text.contains('incorrect pass') ||
-      text.contains('invalid pass');
-  if (passwordWrong) {
-    return 'Password is wrong. Please check your password and try again.';
-  }
-
-  final userWrong = text.contains('user not found') ||
-      text.contains('username not found') ||
-      text.contains('login id not found') ||
-      text.contains('loginid not found') ||
-      text.contains('invalid username') ||
-      text.contains('invalid user') ||
-      text.contains('invalid login id') ||
-      text.contains('user does not exist') ||
-      text.contains('username does not exist') ||
-      text.contains('unknown user') ||
-      text.contains('user not available');
-  if (userWrong) {
-    return 'User ID is wrong. Please check your User ID and try again.';
-  }
-
-  if (text.contains('invalid credential') ||
-      text.contains('incorrect credential') ||
-      text.contains('login failed') ||
-      text.contains('authentication failed') ||
-      text.contains('unauthorized') ||
-      text.contains('wrong credentials')) {
-    return 'User ID or password is incorrect. Please check both and try again.';
-  }
-
-  return 'Login failed. Please check your User ID and password and try again.';
-}
 
 class ApiService {
   final String key;
@@ -220,7 +142,9 @@ class ApiService {
     bool freshConnection = false,
     bool legacyLoginHeaders = false,
     bool includeApiKeyFields = true,
-    Duration requestTimeout = const Duration(seconds: 12),
+    Duration requestTimeout = const Duration(seconds: 20),
+    bool retryTransient = true,
+    bool exactApiKeyFieldOnly = false,
   }) async {
     final cleanKey = key.trim();
     if (cleanKey.isEmpty) {
@@ -228,7 +152,7 @@ class ApiService {
     }
 
     Object? lastError;
-    const maxAttempts = 2;
+    final maxAttempts = retryTransient ? 3 : 1;
 
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       http.Client? requestClient;
@@ -252,14 +176,14 @@ class ApiService {
           // DashboardLogin is deployed behind multiple POS gateway versions.
           // Keep all accepted API-key header aliases for compatibility.
           'Keys': cleanKey,
-          if (!legacyLoginHeaders) 'Key': cleanKey,
-          if (!legacyLoginHeaders) 'X-API-Key': cleanKey,
+          if (!legacyLoginHeaders && !exactApiKeyFieldOnly) 'Key': cleanKey,
+          if (!legacyLoginHeaders && !exactApiKeyFieldOnly) 'X-API-Key': cleanKey,
         });
         request.fields.addAll({
           ...fields,
-          if (includeApiKeyFields && !legacyLoginHeaders) 'Keys': cleanKey,
-          if (includeApiKeyFields && !legacyLoginHeaders) 'key': cleanKey,
-          if (includeApiKeyFields && !legacyLoginHeaders) 'APIKey': cleanKey,
+          if (includeApiKeyFields) 'Keys': cleanKey,
+          if (includeApiKeyFields && !legacyLoginHeaders && !exactApiKeyFieldOnly) 'key': cleanKey,
+          if (includeApiKeyFields && !legacyLoginHeaders && !exactApiKeyFieldOnly) 'APIKey': cleanKey,
         });
 
         final streamed = await requestClient
@@ -280,6 +204,8 @@ class ApiService {
             message.isEmpty
                 ? 'Server error (${response.statusCode})'
                 : message,
+            rawBody: response.body,
+            decoded: decoded,
           );
         }
 
@@ -320,7 +246,7 @@ class ApiService {
 
         // 400/401/403/422 never reach this branch. Network/5xx retries use
         // bounded exponential backoff with tiny jitter.
-        final backoffMs = 250 * (1 << attempt);
+        final backoffMs = 400 * (1 << attempt);
         final jitterMs = (attempt * 113) % 180;
         await Future<void>.delayed(
           Duration(milliseconds: backoffMs + jitterMs),
@@ -366,6 +292,7 @@ class ApiService {
     if (lower.contains('socketexception') ||
         lower.contains('failed host lookup') ||
         lower.contains('timed out') ||
+        lower.contains('timeoutexception') ||
         lower.contains('connection') ||
         lower.contains('network')) {
       throw Exception(
@@ -428,81 +355,147 @@ class ApiService {
     final cleanId = id.trim();
     final cleanPassword = password;
     if (cleanId.isEmpty || cleanPassword.isEmpty) {
-      throw Exception('Login ID and password are required.');
+      throw Exception('Please enter both User ID and Password.');
     }
 
-    // Login is intentionally a SINGLE request. Do not run compatibility
-    // fallbacks here: a wrong username/password commonly returns HTTP 400,
-    // and retrying that response can turn one bad login into several requests,
-    // trigger gateway/rate-limit protection, and cause the next real login to
-    // appear as "Server error (400)".
-    //
-    // The request still sends the currently supported API-key aliases in the
-    // normal post() contract, so a valid key is not dependent on a retry
-    // matrix. Only transient transport/5xx errors are retried by post().
-    final json = await post(
-      '/DashboardLogin',
-      {
-        'LoginID': cleanId,
-        'Password': cleanPassword,
-      },
-      allowEmptyPayload: true,
-      freshConnection: true,
-      requestTimeout: const Duration(seconds: 12),
-    );
-
-    final response = responseMap(json);
-    final status = field(response, ['status', 'success', 'isSuccess', 'ok']) ??
-        field(json, ['status', 'success', 'isSuccess', 'ok']);
-    final message = stringValue(
-      field(response, [
-            'message',
-            'msg',
-            'error',
-            'reason',
-            'errorMessage',
-            'error_message',
-            'statusMessage'
-          ]) ??
-          field(json, [
-            'message',
-            'msg',
-            'error',
-            'reason',
-            'errorMessage',
-            'error_message',
-            'statusMessage'
-          ]),
-    ).trim();
-
-    final lower = message.toLowerCase();
-    final raw = jsonEncode(json).toLowerCase();
-    final combinedText = '$lower $raw';
-
-    if (combinedText.contains('key is invalid') ||
-        combinedText.contains('invalid api key') ||
-        combinedText.contains('api key rejected') ||
-        combinedText.contains('api key was rejected') ||
-        combinedText.contains('invalid key')) {
-      throw Exception(
-        'API key rejected. Please verify the API key in Change API Key.',
+    try {
+      // Authentication is deliberately isolated from the normal data client.
+      // One credential failure is never retried. Only a transport failure may
+      // get the normal short retry, which prevents a bad login from poisoning
+      // the next valid login with repeated 400 requests.
+      final json = await post(
+        '/DashboardLogin',
+        {
+          'LoginID': cleanId,
+          'Password': cleanPassword,
+        },
+        allowEmptyPayload: true,
+        freshConnection: true,
+        requestTimeout: const Duration(seconds: 10),
+        retryTransient: true,
+        exactApiKeyFieldOnly: true,
       );
-    }
 
-    if (status != null && !success(status)) {
-      throw Exception(_friendlyLoginReason(json, response, message));
-    }
+      final response = responseMap(json);
+      final status = field(response, ['status', 'success', 'isSuccess', 'ok']) ??
+          field(json, ['status', 'success', 'isSuccess', 'ok']);
+      final message = stringValue(
+        field(response, [
+              'message', 'msg', 'error', 'reason', 'errorMessage',
+              'error_message', 'statusMessage'
+            ]) ??
+            field(json, [
+              'message', 'msg', 'error', 'reason', 'errorMessage',
+              'error_message', 'statusMessage'
+            ]),
+      ).trim();
+      final combinedText = '${message.toLowerCase()} ${jsonEncode(json).toLowerCase()}';
 
-    if (status == null &&
-        (combinedText.contains('login failed') ||
-            combinedText.contains('invalid credential') ||
-            combinedText.contains('wrong password') ||
-            combinedText.contains('incorrect password') ||
-            combinedText.contains('user not found') ||
-            combinedText.contains('user not available') ||
-            combinedText.contains('username not found'))) {
-      throw Exception(_friendlyLoginReason(json, response, message));
+      if (_containsApiKeyError(combinedText)) {
+        throw Exception('API key rejected. Please verify the API key in Change API Key.');
+      }
+      if (status != null && !success(status)) {
+        throw Exception(_friendlyLoginReason(json, response, message));
+      }
+      if (status == null && _containsCredentialFailure(combinedText)) {
+        throw Exception(_friendlyLoginReason(json, response, message));
+      }
+    } on _HttpStatusException catch (e) {
+      final text = '${e.message} ${e.rawBody}'.toLowerCase();
+      if (_containsApiKeyError(text)) {
+        throw Exception('API key rejected. Please verify the API key in Change API Key.');
+      }
+      // IMPORTANT: preserve the server response so a POS deployment that
+      // explicitly says "user not found" or "wrong password" can show the
+      // exact friendly error instead of the useless "Server error (400)".
+      if (e.statusCode == 408) {
+        throw Exception('Login timed out. The network or POS server is responding too slowly. Please try again.');
+      }
+      if (e.statusCode == 429) {
+        throw Exception('Too many login attempts. Please wait a few seconds and try again.');
+      }
+      if (e.statusCode >= 500) {
+        throw Exception('Suvidha POS server is temporarily unavailable. Please try again shortly.');
+      }
+      if (e.statusCode == 400 || e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 422) {
+        final decoded = e.decoded is Map
+            ? Map<String, dynamic>.from(e.decoded as Map)
+            : <String, dynamic>{};
+        final response = responseMap(decoded);
+        throw Exception(_friendlyLoginReason(decoded, response, e.message));
+      }
+      rethrow;
     }
+  }
+
+  bool _containsApiKeyError(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('key is invalid') ||
+        lower.contains('invalid api key') ||
+        lower.contains('api key rejected') ||
+        lower.contains('api key was rejected') ||
+        lower.contains('invalid key') ||
+        lower.contains('key rejected');
+  }
+
+  bool _containsCredentialFailure(String text) {
+    final lower = text.toLowerCase();
+    return lower.contains('login failed') ||
+        lower.contains('invalid credential') ||
+        lower.contains('wrong password') ||
+        lower.contains('incorrect password') ||
+        lower.contains('invalid password') ||
+        lower.contains('password is wrong') ||
+        lower.contains('user not found') ||
+        lower.contains('user not available') ||
+        lower.contains('invalid user') ||
+        lower.contains('invalid username') ||
+        lower.contains('username not found') ||
+        lower.contains('user id not found') ||
+        lower.contains('incorrect username') ||
+        lower.contains('incorrect user id') ||
+        lower.contains('wrong user id');
+  }
+
+  String _friendlyLoginReason(
+    Map<String, dynamic> json,
+    Map<String, dynamic> response,
+    String serverMessage,
+  ) {
+    final text = '${serverMessage.toLowerCase()} ${jsonEncode(json).toLowerCase()} ${jsonEncode(response).toLowerCase()}';
+    if (_containsApiKeyError(text)) {
+      return 'API key rejected. Please verify the API key in Change API Key.';
+    }
+    if (text.contains('wrong password') ||
+        text.contains('incorrect password') ||
+        text.contains('invalid password') ||
+        text.contains('password is wrong') ||
+        text.contains('password incorrect')) {
+      return 'Password is wrong. Please check your password and try again.';
+    }
+    if (text.contains('user not found') ||
+        text.contains('user not available') ||
+        text.contains('invalid user') ||
+        text.contains('invalid username') ||
+        text.contains('username not found') ||
+        text.contains('user id not found') ||
+        text.contains('incorrect username') ||
+        text.contains('incorrect user id') ||
+        text.contains('wrong user id')) {
+      return 'User ID is wrong. Please check your User ID and try again.';
+    }
+    if (_containsCredentialFailure(text) ||
+        text.contains('unauthorized') ||
+        text.contains('authentication failed') ||
+        text.contains('credentials')) {
+      return 'User ID or Password is incorrect. Please check both and try again.';
+    }
+    if (serverMessage.trim().isNotEmpty &&
+        !serverMessage.toLowerCase().contains('bad request') &&
+        !serverMessage.toLowerCase().contains('server error')) {
+      return serverMessage.trim();
+    }
+    return 'Login request was rejected by the server. Please check your User ID, Password and API key, then try again.';
   }
 
   Future<Map<String, dynamic>> dashboard(
@@ -1376,8 +1369,6 @@ class _DashboardShellState extends State<DashboardShell> {
   int index = 0;
   String selectedOutlet = '0';
   String selectedOutletName = 'All Outlets';
-  DateTime selectedFrom = DateTime.now();
-  DateTime selectedTo = DateTime.now();
   List<Map<String, dynamic>> availableOutlets = [];
   final ValueNotifier<int> syncSignal = ValueNotifier<int>(0);
 
@@ -1407,15 +1398,6 @@ class _DashboardShellState extends State<DashboardShell> {
         },
         onLiveSync: () async {
           syncSignal.value++;
-        },
-        onDateChanged: (from, to) {
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            selectedFrom = from;
-            selectedTo = to;
-          });
         },
         syncSignal: syncSignal,
         onOutletsChanged: (outlets) {
@@ -1481,7 +1463,6 @@ class DashboardPage extends StatefulWidget {
   final void Function(String id, String name) onOutletChanged;
   final void Function(List<Map<String, dynamic>> outlets)? onOutletsChanged;
   final Future<void> Function() onLiveSync;
-  final void Function(DateTime from, DateTime to)? onDateChanged;
   final ValueNotifier<int> syncSignal;
   final Future<void> Function() onLogout;
 
@@ -1493,7 +1474,6 @@ class DashboardPage extends StatefulWidget {
     required this.onOutletChanged,
     this.onOutletsChanged,
     required this.onLiveSync,
-    this.onDateChanged,
     required this.syncSignal,
     required this.onLogout,
   });
@@ -1530,6 +1510,58 @@ List<Map<String, dynamic>> summaryRowsFromApi(Map<String, dynamic> response) {
     ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
     ['gross_sale', 'grosssale', 'grosstotal', 'net_sale', 'netsale', 'nettotal'],
   );
+}
+
+/// The selected-outlet Dashboard/Sale request is already scoped by `ids`.
+/// Some POS versions omit outlet metadata on the scoped summary, while other
+/// versions put the complete metrics under `outlets`. Prefer the complete
+/// outlet row, then matching summary rows, then a single unlabelled summary.
+/// Never mix values from different outlets or derive a metric from another one.
+List<Map<String, dynamic>> scopedDashboardSummaryRows(
+  Map<String, dynamic> response,
+  String outletId, {
+  String outletName = '',
+}) {
+  final wanted = normalizedId(outletId);
+  if (wanted.isEmpty || wanted == '0') {
+    return summaryRowsFromApi(response).map(normalizeApiMetricRow).toList();
+  }
+
+  final outletRows = outletRowsFromApi(response)
+      .map(normalizeApiMetricRow)
+      .toList();
+  final matchingOutletRows = outletRows
+      .where((row) => rowMatchesOutlet(row, wanted, outletName: outletName))
+      .toList();
+  if (matchingOutletRows.isNotEmpty) {
+    return matchingOutletRows;
+  }
+
+  final summaries = summaryRowsFromApi(response)
+      .map(normalizeApiMetricRow)
+      .toList();
+  final matchingSummaries = summaries
+      .where((row) => rowMatchesOutlet(row, wanted, outletName: outletName))
+      .toList();
+  if (matchingSummaries.isNotEmpty) {
+    return matchingSummaries;
+  }
+
+  // Because this response was requested with ids=<selected outlet>, one
+  // unlabelled summary row is authoritative for that outlet.
+  if (summaries.length == 1) {
+    return summaries.map((row) {
+      final copy = Map<String, dynamic>.from(row);
+      copy['outletId'] = wanted;
+      copy['outlet_id'] = wanted;
+      if (outletName.trim().isNotEmpty) {
+        copy['outletName'] = outletName.trim();
+        copy['outlet_name'] = outletName.trim();
+      }
+      return copy;
+    }).toList();
+  }
+  return const <Map<String, dynamic>>[];
 }
 
 Map<String, dynamic> normalizeApiMetricRow(Map<String, dynamic> row) {
@@ -1817,13 +1849,11 @@ class _DashboardPageState extends State<DashboardPage> {
         // The saleSummary row is the authoritative dashboard record and must
         // drive BOTH the cards and the single outlet bar. Never prefer an
         // outlet-wise/secondary row when the scoped summary is present.
-        final selectedSummaryRows = aggregateSummaryRows.isNotEmpty
-            ? _attachOutletContext(aggregateSummaryRows, selectedId)
-            : _attachOutletContext(
-                allOutletRows.where((r) =>
-                    outletIdOf(r).isEmpty || normalizedId(outletIdOf(r)) == selectedId),
-                selectedId,
-              );
+        final selectedSummaryRows = scopedDashboardSummaryRows(
+          aggregateResponse,
+          selectedId,
+          outletName: selectedOutletNameForDashboard,
+        );
 
         combinedSummary.addAll(selectedSummaryRows);
 
@@ -1848,20 +1878,16 @@ class _DashboardPageState extends State<DashboardPage> {
           });
         }
 
-        combinedLive.addAll(
-          aggregateLiveRows.where((r) => rowMatchesOutlet(
-                r,
-                selectedId,
-                outletName: selectedOutletNameForDashboard,
-              )),
-        );
-        combinedItems.addAll(
-          _itemRowsFromResponse(aggregateResponse).where((r) => rowMatchesOutlet(
-                r,
-                selectedId,
-                outletName: selectedOutletNameForDashboard,
-              )),
-        );
+        combinedLive.addAll(_scopeSelectedDashboardRows(
+          aggregateLiveRows,
+          selectedId,
+          selectedOutletNameForDashboard,
+        ));
+        combinedItems.addAll(_scopeSelectedDashboardRows(
+          _itemRowsFromResponse(aggregateResponse),
+          selectedId,
+          selectedOutletNameForDashboard,
+        ));
       }
 
       final responseForUi = Map<String, dynamic>.from(aggregateResponse);
@@ -1934,6 +1960,26 @@ class _DashboardPageState extends State<DashboardPage> {
     return rows;
   }
 
+  List<Map<String, dynamic>> _scopeSelectedDashboardRows(
+    Iterable<Map<String, dynamic>> rows,
+    String outletId,
+    String outletName,
+  ) {
+    final source = rows.toList();
+    if (source.isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+    final explicitOutletRows = source.where((row) => outletIdOf(row).isNotEmpty).toList();
+    if (explicitOutletRows.isNotEmpty) {
+      return explicitOutletRows
+          .where((row) => rowMatchesOutlet(row, outletId, outletName: outletName))
+          .toList();
+    }
+    // No row carries outlet metadata. Since Dashboard/Sale itself was called
+    // with ids=<selected outlet>, these rows belong to that selected outlet.
+    return _attachOutletContext(source, outletId);
+  }
+
   Future<void> selectOutlet(String id, String name) async {
     final selectedId = normalizedId(id).isEmpty ? '0' : normalizedId(id);
     directItemRowsCache = [];
@@ -1978,7 +2024,6 @@ class _DashboardPageState extends State<DashboardPage> {
     // Invalidate any in-flight request and immediately remove the old range's
     // values. The next load snapshots the new range and repopulates the UI.
     ++requestId;
-    widget.onDateChanged?.call(from, to);
     if (mounted) {
       setState(() {
         data = {};
@@ -4390,16 +4435,11 @@ class _ReportsPageState extends State<ReportsPage> {
           );
           previousResponse = responseMap(previousJson);
         } catch (_) {}
-        final rows = rowsFromResponse(
+        final selected = scopedDashboardSummaryRows(
           response,
-          ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
-          ['grosstotal', 'grosssale', 'nettotal', 'netsale', 'ordertotal'],
+          reportOutletId,
+          outletName: widget.outletName,
         );
-        final selected = summaryForOutlet(
-        rows,
-        reportOutletId,
-        outletName: widget.outletName,
-      );
         final nextMetrics = <String, num>{
           'Gross Sale': _sum(selected, 'grossTotal'),
           'Net Sale': _sum(selected, 'netTotal'),
@@ -4528,13 +4568,8 @@ class _ReportsPageState extends State<ReportsPage> {
         useOutletFilter: reportOutletId != '0',
       );
       final response = responseMap(json);
-      final rows = rowsFromResponse(
+      final selected = scopedDashboardSummaryRows(
         response,
-        ['saleSummary', 'salesummary', 'salesSummary', 'summary', 'sale'],
-        ['grosstotal', 'grosssale', 'nettotal', 'netsale', 'ordertotal'],
-      );
-      final selected = summaryForOutlet(
-        rows,
         reportOutletId,
         outletName: widget.outletName,
       );

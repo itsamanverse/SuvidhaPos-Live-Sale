@@ -44,4 +44,47 @@ void main() {
     expect(tableDisplayNameOf({'tableNo': 1}), '—');
   });
 
+  test('selected dashboard prefers complete outlet row over net-only summary', () {
+    final response = {
+      'summary': {'net_sale': 292013.01},
+      'outlets': [
+        {
+          'outlet_id': '7',
+          'outlet_name': 'Wild Sage',
+          'gross_sale': 311825,
+          'net_sale': 292013.01,
+          'tax': 19811.99,
+          'discount': 5000,
+          'order_count': 196,
+        },
+      ],
+    };
+    final rows = scopedDashboardSummaryRows(
+      Map<String, dynamic>.from(response),
+      '7',
+      outletName: 'Wild Sage',
+    );
+    expect(rows, hasLength(1));
+    expect(number(field(rows.first, ['gross_sale', 'grossTotal'])), 311825);
+    expect(number(field(rows.first, ['tax', 'taxTotal'])), 19811.99);
+  });
+
+  test('selected scoped unlabelled summary gets outlet context', () {
+    final rows = scopedDashboardSummaryRows(
+      {
+        'summary': {
+          'gross_sale': 1000,
+          'net_sale': 900,
+          'tax': 100,
+        },
+      },
+      '2',
+      outletName: 'Outlet 2',
+    );
+    expect(rows, hasLength(1));
+    expect(outletIdOf(rows.first), '2');
+    expect(outletNameOf(rows.first), 'Outlet 2');
+    expect(number(field(rows.first, ['gross_sale', 'grossTotal'])), 1000);
+  });
+
 }
