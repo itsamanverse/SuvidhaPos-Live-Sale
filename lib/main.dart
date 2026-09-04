@@ -970,14 +970,14 @@ List<Map<String, dynamic>> summaryForResponseOutlet(
 }
 
 List<Map<String, dynamic>> summaryForOutlet(
-  List<Map<String, dynamic>> rows,
+  Iterable<Map<String, dynamic>> rows,
   String outletId, {
   String outletName = '',
 }) {
   final wanted = normalizedId(outletId);
   if (wanted.isEmpty || wanted == '0') {
     final rowsWithOutlet = rows.where((r) => outletIdOf(r).isNotEmpty).toList();
-    return rowsWithOutlet.isNotEmpty ? rowsWithOutlet : rows;
+    return rowsWithOutlet.isNotEmpty ? rowsWithOutlet : rows.toList();
   }
 
   final idMatches = rows.where((r) => rowMatchesOutlet(r, wanted)).toList();
@@ -2002,34 +2002,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return result;
   }
 
-  List<Map<String, dynamic>> _billRowsFromResponse(
-      Map<String, dynamic> response) {
-    return rowsFromResponse(
-      response,
-      const [
-        'liveSale',
-        'liveSales',
-        'liveTable',
-        'liveTables',
-        'recentSales',
-        'recentSale',
-        'bills',
-        'billList',
-        'sales',
-        'saleDetails',
-        'transactions',
-        'transactionList',
-      ],
-      const [
-        'billno',
-        'bill_no',
-        'bill_nofk',
-        'tableno',
-        'table_no',
-      ],
-    );
-  }
-
   List<Map<String, dynamic>> _itemRowsFromResponse(
       Map<String, dynamic> response) {
     final found = <Map<String, dynamic>>[];
@@ -2083,14 +2055,6 @@ class _DashboardPageState extends State<DashboardPage> {
     }
     walk(response);
     return found;
-  }
-
-  Future<void> _loadTopItems(
-      Map<String, dynamic> response, List<Map<String, dynamic>> rows) async {
-    // Top Selling Items must come directly from Dashboard/Sale. Do not build
-    // or repair the list from LiveTableItem/Sale bill details.
-    directItemRowsCache = _itemRowsFromResponse(response);
-    if (mounted) setState(() {});
   }
 
   List<Map<String, dynamic>> _aggregateItemRows(
