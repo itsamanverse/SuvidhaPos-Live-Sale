@@ -1948,7 +1948,9 @@ class _DashboardPageState extends State<DashboardPage> {
       }
     } finally {
       if (mounted && request == requestId) {
-        setState(() => loading = false);
+        setState(() {
+          loading = false;
+        });
       }
     }
   }
@@ -3162,7 +3164,10 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
     }
 
     final enriched = <Map<String, dynamic>>[];
-    Map<String, dynamic>? authoritativeOutletSummary;
+    // LiveTableItem/Sale returns outlet-level financial totals with each bill.
+    // For All Outlets we need exactly one authoritative summary per outlet,
+    // not one global summary and not one summary per bill.
+    final authoritativeOutletSummaries = <String, Map<String, dynamic>>{};
     const concurrency = 4;
     final entries = unique.entries.toList();
     for (var offset = 0; offset < entries.length; offset += concurrency) {
@@ -3182,13 +3187,15 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
           // bill response. Keep the first successful original summary once per
           // outlet; summing it once per bill was the reason Pending/Gross/Net
           // were doubled. Table rows still retain every bill detail.
-          authoritativeOutletSummary ??= <String, dynamic>{
-            ...detailRow,
-            if (outletIdOf(detailRow).isEmpty)
-              'outlet_id': entry.key.split('|').first,
-            if (outletNameOf(detailRow) == 'Outlet')
-              'outlet_name': selectedOutletNameForLive(entry.key.split('|').first),
-          };
+          final outletKey = entry.key.split('|').first;
+          if (detailRow.isNotEmpty && !authoritativeOutletSummaries.containsKey(outletKey)) {
+            authoritativeOutletSummaries[outletKey] = <String, dynamic>{
+              ...detailRow,
+              if (outletIdOf(detailRow).isEmpty) 'outlet_id': outletKey,
+              if (outletNameOf(detailRow) == 'Outlet')
+                'outlet_name': selectedOutletNameForLive(outletKey),
+            };
+          }
           final merged = <String, dynamic>{...base, ...detailRow};
           // Never lose the discovery identity when a detail response omits it.
           if (outletIdOf(merged).isEmpty) {
@@ -3216,9 +3223,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
       'liveSale': enriched,
       // Exactly one authoritative LiveTableItem/Sale summary per outlet.
       // Never sum repeated outlet-level summary values across bills.
-      'saleSummary': authoritativeOutletSummary == null
-          ? <Map<String, dynamic>>[]
-          : <Map<String, dynamic>>[authoritativeOutletSummary!],
+      'saleSummary': authoritativeOutletSummaries.values.toList(),
     };
   }
 
@@ -3970,7 +3975,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
 
   @override
   Widget build(BuildContext context) {
-    final rows = selectedLive;
+    final rows = liveTableCandidates;
     // All financial cards in this page are calculated only from successful
     // LiveTableItem/Sale responses. Dashboard/Sale is never a financial
     // fallback for Live Tables.
@@ -4127,12 +4132,7 @@ class _LiveTablesPageState extends State<LiveTablesPage> {
                 itemCount: rows.length,
                 itemBuilder: (context, index) {
                   final row = rows[index];
-                  final status = stringValue(field(
-                          row, ['bill_status', 'billStatus', 'status'], '0'))
-                      .trim()
-                      .toLowerCase();
-                  final running =
-                      status == '0' || status == 'running' || status == 'open';
+                  final running = _isActualLiveTable(row);
                   return InkWell(
                     borderRadius: BorderRadius.circular(18),
                     onTap: () => openTable(row),
