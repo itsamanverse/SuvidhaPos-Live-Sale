@@ -12,29 +12,50 @@ live tables and reports.
 
 ## Login reliability
 
-The login client uses a bounded compatibility matrix for the existing POS
-gateway. It supports repeated Login -> Logout -> Login cycles, API-key changes,
-fresh/pooled connections, and legacy API-key header/body aliases. Authentication
-failures are not treated as transient network failures.
-
-The app never deletes the saved API key during Logout. Changing the API key
-clears only the old login credentials.
+- Login uses the production gateway contract: `Keys` + `X-API-Key` headers and
+  only `LoginID`/`Password` form fields.
+- Each sign-in uses a fresh no-cache connection so changing the API key cannot
+  reuse stale gateway/session state.
+- Explicit server responses such as user-not-found and wrong-password are mapped
+  to `User ID is wrong` and `Password is wrong`. If the backend itself returns
+  only ambiguous `invalid credentials`, the app safely says that User ID or
+  Password is incorrect instead of guessing which field is wrong.
+- Offline, DNS, TLS, timeout, busy-server and server-unavailable failures are
+  shown as human-readable messages without raw HTTP/status-code errors.
+- Authentication failures are not retried; only transient transport/5xx failures
+  get a short bounded retry.
+- Logout keeps the saved API key. Changing the API key clears only the previous
+  login credentials.
 
 ## Dashboard/data behavior
 
-- All Outlets is combined by default.
-- Selecting an outlet scopes dashboard, sales and item data to that outlet.
-- Gross Sale uses the authoritative scoped summary before chart fallbacks.
-- Top Selling Items is loaded from dashboard item rows and falls back to bill
-  detail data with bounded retries.
-- Live Tables uses `LiveTableItem/Sale` as the source of truth for table-level
-  status, table name, items, Gross Sale, Net Sale and Pending Amount.
-- `Dashboard/Sale` is used only to discover the current outlet/bill keys needed
-  to call the bill-scoped Live Tables endpoint; its financial values are never
-  used as Live Tables financial fallbacks.
-- Live table labels use the POS table identifier format, e.g. `Table No: WS1`.
-- Date/outlet changes invalidate dependent caches to prevent stale data crossing
-  scopes.
+- Dashboard always loads `Dashboard/Sale` with `ids=0` and selects an outlet
+  locally from original outlet-tagged rows. This avoids partial selected-outlet
+  responses that expose Net Sale while other cards are blank.
+- All Outlets uses a true root combined summary when present; if the API returns
+  per-outlet summary rows instead, those original rows are summed rather than
+  treating the first outlet as the combined total.
+- Gross/Net values shown on a chart bar and its tap popup come from the same
+  normalized outlet row. Gross is never fabricated from Net or another metric.
+- API aliases are normalized for Tax, Discount, Covers, APC, Orders, Void,
+  Modified, Complimentary, Dine-In, customer and unsettled metrics.
+- Top Selling Items uses `Tablet/ListofItems/POS` with `billType=k`; a transient
+  top-item request failure keeps only the previous same-filter snapshot.
+
+## Live Tables / sync
+
+- Live Tables use `LiveTableItem/Sale` directly with `bill_no=0` for the current
+  table dataset and an exact bill only when a table detail is opened.
+- The old Dashboard discovery + one-request-per-bill waterfall is removed.
+- Table-name aliases such as `t_name_fk`, `TableNameFK`, `tblNameFk` and
+  `tableTitle` are preserved and displayed as `Table No: <POS table name>`.
+- A successful empty refresh is authoritative, so settled/closed tables disappear
+  instead of stale cached rows remaining on screen. Network failures alone retain
+  the last known-good snapshot.
+- Dashboard and Live Tables refresh every 30 seconds, refresh immediately on
+  outlet/date changes and app resume, and do not overlap periodic requests.
+- All-outlet Live Table requests run in bounded batches of four to stay fast
+  without producing a request burst on slow networks or large installations.
 
 ## CI
 

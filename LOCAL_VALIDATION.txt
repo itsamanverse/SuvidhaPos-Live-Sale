@@ -1,0 +1,28 @@
+SuvidhaPos Live Sale - Deep Fix Validation
+Version: 1.0.7+9
+
+PASS: structural scan: lib/main.dart
+PASS: structural scan: test/deep_invariants_test.dart
+PASS: structural scan: test/widget_test.dart
+PASS: login sends Keys + X-API-Key
+PASS: login preserves HTTP status internally for credential mapping while UI gets friendly text
+PASS: Dashboard hard-locked to ids=0
+PASS: selected aggregate summary cannot be relabelled as an outlet summary
+PASS: secondary Dashboard aliases normalized (APC/Void/Modified/Complimentary/Dine-In/Unsettled etc.)
+PASS: Live Tables uses bill_no=0 dataset
+PASS: Live Tables has no Dashboard API dependency
+PASS: successful empty Live response clears stale rows
+PASS: strict outlet identity is used in Live Tables
+PASS: table master/name resolver is present
+PASS: numeric table foreign keys are not displayed as table names
+PASS: manual refresh preserves the current outlet/date filter
+PASS: 30-second refresh interval
+PASS: periodic refresh overlap guard
+PASS: bounded Live request concurrency
+PASS: pubspec.yaml, analysis_options.yaml, and GitHub workflow YAML parse
+PASS: repository live_server_50x_smoke.sh shell syntax
+PASS: app version is 1.0.7+9
+PASS: login contract matches repository smoke-test headers
+
+Environment limitation:
+Flutter SDK and Dart CLI are not installed in this execution environment, so flutter analyze, flutter test, and flutter build could not be executed locally here. The repository GitHub workflow remains configured to run formatting/analyze/test/build with Flutter 3.35.7.

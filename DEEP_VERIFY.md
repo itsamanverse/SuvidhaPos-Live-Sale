@@ -1,17 +1,24 @@
 # Deep verification checklist
 
-The repository includes `test/deep_invariants_test.dart` with 50 iterations for the critical outlet/sale invariants:
+`test/deep_invariants_test.dart` covers the critical public data invariants:
 
-1. All three outlet selections use the outlet row from the aggregate `Dashboard/Sale` response.
-2. Gross Sale is read only from an explicit Gross field; Net/Avg Revenue/Orders are never used as a Gross fallback.
-3. All Outlets keeps one row per outlet and sums those outlet rows only for outlet-wise validation; the dashboard root summary remains the combined POS total.
-4. Missing Gross stays `0` instead of silently becoming Net Sale.
-5. Table names such as `WS1` are displayed after the UI label `Table No:`.
+1. Gross Sale is read only from an explicit Gross field and is never derived
+   from Net/Avg Revenue/Orders.
+2. Aggregate `ids=0` data cannot relabel a combined summary as a selected outlet.
+3. Partial rows for the SAME outlet can fill missing canonical aliases without
+   adding/deriving financial values.
+4. Secondary Dashboard aliases normalize into APC/Void/Modified/Complimentary/
+   Dine-In/Customer/Unsettled cards.
+5. Live table names preserve original POS values across common FK/name variants.
 
-The GitHub workflow runs `flutter test` and `flutter analyze --no-fatal-infos --no-fatal-warnings` before producing the single universal APK.
+The repository GitHub workflow runs `flutter test` and `flutter analyze` before
+producing the universal Android APK. This container does not include a Flutter SDK,
+so final local verification here also includes structural Dart-source checks, API
+contract/source checks, stale-cache checks, and diff review.
 
 ## API source of truth
 
-- Dashboard: `POST /api/V1/Dashboard/Sale`
-- Live Tables: `POST /api/V1/LiveTableItem/Sale`
+- Dashboard: `POST /api/V1/Dashboard/Sale` with `ids=0`
+- Live Tables: `POST /api/V1/LiveTableItem/Sale` (`bill_no=0` dataset)
 - Top Selling Items: `POST /api/V1/Tablet/ListofItems/POS` with `billType=k`
+- Login: `POST /api/V1/DashboardLogin` with `Keys` + `X-API-Key` headers
