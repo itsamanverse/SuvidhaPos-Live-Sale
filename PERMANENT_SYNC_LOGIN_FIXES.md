@@ -2,8 +2,11 @@
 
 ## Login
 - Authentication uses a fresh no-cache connection per sign-in.
-- Login sends `Keys` and `X-API-Key` headers plus only `LoginID` and `Password`
-  form fields, matching the repository live-server smoke contract.
+- Primary login exactly restores the production-compatible request used before
+  v1.0.7: `Keys` header plus multipart `LoginID`, `Password`, and `Keys`.
+- A second login profile (`Keys` + `X-API-Key` headers, no form key) is attempted
+  only after a generic request-format rejection; explicit credential/API-key
+  failures are not duplicated.
 - HTTP 400/401/403/422 credential failures are not retried. Transient transport,
   timeout, 408/429/5xx failures use only a short bounded retry.
 - Explicit backend wording is mapped to `User ID is wrong` or `Password is wrong`.

@@ -12,8 +12,11 @@ live tables and reports.
 
 ## Login reliability
 
-- Login uses the production gateway contract: `Keys` + `X-API-Key` headers and
-  only `LoginID`/`Password` form fields.
+- Login first uses the production request shape that was already working before
+  v1.0.7: `Keys` header plus multipart `LoginID`, `Password`, and `Keys`.
+- Only after a generic request-format rejection does it make one controlled
+  compatibility attempt with `Keys` + `X-API-Key` headers and only
+  `LoginID`/`Password` form fields. Credential/key failures are never duplicated.
 - Each sign-in uses a fresh no-cache connection so changing the API key cannot
   reuse stale gateway/session state.
 - Explicit server responses such as user-not-found and wrong-password are mapped

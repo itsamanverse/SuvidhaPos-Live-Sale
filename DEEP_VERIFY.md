@@ -21,4 +21,4 @@ contract/source checks, stale-cache checks, and diff review.
 - Dashboard: `POST /api/V1/Dashboard/Sale` with `ids=0`
 - Live Tables: `POST /api/V1/LiveTableItem/Sale` (`bill_no=0` dataset)
 - Top Selling Items: `POST /api/V1/Tablet/ListofItems/POS` with `billType=k`
-- Login: `POST /api/V1/DashboardLogin` with `Keys` + `X-API-Key` headers
+- Login primary: `POST /api/V1/DashboardLogin` with `Keys` header + multipart `Keys`; compatibility fallback uses `Keys` + `X-API-Key` headers

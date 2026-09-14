@@ -398,6 +398,66 @@ class ApiService {
     return false;
   }
 
+  Future<Map<String, dynamic>> _loginRequest(
+    String cleanId,
+    String cleanPassword, {
+    required bool gatewayHeaderProfile,
+  }) {
+    // Profile A (default) intentionally matches the request shape that was
+    // already working in production before the deep refactor:
+    //   headers: Keys
+    //   multipart fields: LoginID, Password, Keys
+    // Some gateway deployments instead expect the smoke-test profile:
+    //   headers: Keys + X-API-Key
+    //   multipart fields: LoginID, Password
+    // Login() uses A first and only tries B after a generic protocol rejection.
+    return post(
+      '/DashboardLogin',
+      {
+        'LoginID': cleanId,
+        'Password': cleanPassword,
+      },
+      allowEmptyPayload: true,
+      freshConnection: true,
+      includeApiKeyFields: !gatewayHeaderProfile,
+      requestTimeout: const Duration(seconds: 10),
+      retryTransient: true,
+      exactApiKeyFieldOnly: !gatewayHeaderProfile,
+      loginGatewayHeaders: gatewayHeaderProfile,
+      preserveHttpStatus: true,
+      retryAttempts: gatewayHeaderProfile ? 1 : 2,
+    );
+  }
+
+  bool _shouldTryAlternateLoginProfile(_HttpStatusException error) {
+    final text = '${error.message} ${error.rawBody}'.toLowerCase();
+
+    // Never duplicate a request when the server has already identified a real
+    // credential or API-key problem. The fallback is only for request-shape /
+    // gateway compatibility failures.
+    if (_containsCredentialFailure(text) || _containsApiKeyError(text)) {
+      return false;
+    }
+
+    if (error.statusCode == 400 ||
+        error.statusCode == 415 ||
+        error.statusCode == 422) {
+      return true;
+    }
+
+    // 401/403 can mean credentials, so only retry those if the server wording
+    // points to a missing/unsupported key/header/request format.
+    if (error.statusCode == 401 || error.statusCode == 403) {
+      return text.contains('missing') ||
+          text.contains('header') ||
+          text.contains('key required') ||
+          text.contains('api key required') ||
+          text.contains('unsupported') ||
+          text.contains('request format');
+    }
+    return false;
+  }
+
   Future<void> login(String id, String password) async {
     final cleanId = id.trim();
     final cleanPassword = password;
@@ -406,25 +466,41 @@ class ApiService {
     }
 
     try {
-      // Authentication is deliberately isolated from the normal data client.
-      // One credential failure is never retried. Only a transport failure may
-      // get the normal short retry, which prevents a bad login from poisoning
-      // the next valid login with repeated 400 requests.
-      final json = await post(
-        '/DashboardLogin',
-        {
-          'LoginID': cleanId,
-          'Password': cleanPassword,
-        },
-        allowEmptyPayload: true,
-        freshConnection: true,
-        includeApiKeyFields: false,
-        requestTimeout: const Duration(seconds: 8),
-        retryTransient: true,
-        loginGatewayHeaders: true,
-        preserveHttpStatus: true,
-        retryAttempts: 2,
-      );
+      Map<String, dynamic> json;
+      try {
+        // First use the exact production-compatible request shape that the app
+        // used before v1.0.7. This restores the multipart `Keys` field that the
+        // live server may require.
+        json = await _loginRequest(
+          cleanId,
+          cleanPassword,
+          gatewayHeaderProfile: false,
+        );
+      } on _HttpStatusException catch (primaryError) {
+        if (!_shouldTryAlternateLoginProfile(primaryError)) {
+          rethrow;
+        }
+
+        try {
+          // One controlled compatibility attempt for gateway versions that use
+          // the header-only login contract documented by the smoke test.
+          json = await _loginRequest(
+            cleanId,
+            cleanPassword,
+            gatewayHeaderProfile: true,
+          );
+        } on _HttpStatusException catch (fallbackError) {
+          final fallbackText =
+              '${fallbackError.message} ${fallbackError.rawBody}'.toLowerCase();
+          if (_containsCredentialFailure(fallbackText) ||
+              _containsApiKeyError(fallbackText)) {
+            throw fallbackError;
+          }
+          // The original response is usually the best representation of the
+          // production endpoint. Preserve it if both protocol profiles fail.
+          throw primaryError;
+        }
+      }
 
       final response = responseMap(json);
       final status = field(response, ['status', 'success', 'isSuccess', 'ok']) ??
@@ -439,10 +515,13 @@ class ApiService {
               'error_message', 'statusMessage'
             ]),
       ).trim();
-      final combinedText = '${message.toLowerCase()} ${jsonEncode(json).toLowerCase()}';
+      final combinedText =
+          '${message.toLowerCase()} ${jsonEncode(json).toLowerCase()}';
 
       if (_containsApiKeyError(combinedText)) {
-        throw Exception('API key rejected. Please verify the API key in Change API Key.');
+        throw Exception(
+          'API key rejected. Please verify the API key in Change API Key.',
+        );
       }
       if (status != null && !success(status)) {
         throw Exception(_friendlyLoginReason(json, response, message));
@@ -453,21 +532,30 @@ class ApiService {
     } on _HttpStatusException catch (e) {
       final text = '${e.message} ${e.rawBody}'.toLowerCase();
       if (_containsApiKeyError(text)) {
-        throw Exception('API key rejected. Please verify the API key in Change API Key.');
+        throw Exception(
+          'API key rejected. Please verify the API key in Change API Key.',
+        );
       }
-      // IMPORTANT: preserve the server response so a POS deployment that
-      // explicitly says "user not found" or "wrong password" can show the
-      // exact friendly error instead of the useless "Server error (400)".
       if (e.statusCode == 408) {
-        throw Exception('Login timed out. The network or POS server is responding too slowly. Please try again.');
+        throw Exception(
+          'Login timed out. Your internet connection or the Suvidha POS server is responding too slowly. Please try again.',
+        );
       }
       if (e.statusCode == 429) {
-        throw Exception('Too many login attempts. Please wait a few seconds and try again.');
+        throw Exception(
+          'Too many login attempts. Please wait a few seconds and try again.',
+        );
       }
       if (e.statusCode >= 500) {
-        throw Exception('Suvidha POS server is temporarily unavailable. Please try again shortly.');
+        throw Exception(
+          'Suvidha POS server is temporarily unavailable. Please try again shortly.',
+        );
       }
-      if (e.statusCode == 400 || e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 422) {
+      if (e.statusCode == 400 ||
+          e.statusCode == 401 ||
+          e.statusCode == 403 ||
+          e.statusCode == 415 ||
+          e.statusCode == 422) {
         final decoded = e.decoded is Map
             ? Map<String, dynamic>.from(e.decoded as Map)
             : <String, dynamic>{};

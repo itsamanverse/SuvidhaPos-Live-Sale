@@ -1,28 +1,30 @@
-SuvidhaPos Live Sale - Deep Fix Validation
-Version: 1.0.7+9
+SuvidhaPos Live Sale - Login Hotfix Validation
+Version: 1.0.8+10
 
-PASS: structural scan: lib/main.dart
-PASS: structural scan: test/deep_invariants_test.dart
-PASS: structural scan: test/widget_test.dart
-PASS: login sends Keys + X-API-Key
-PASS: login preserves HTTP status internally for credential mapping while UI gets friendly text
-PASS: Dashboard hard-locked to ids=0
-PASS: selected aggregate summary cannot be relabelled as an outlet summary
-PASS: secondary Dashboard aliases normalized (APC/Void/Modified/Complimentary/Dine-In/Unsettled etc.)
-PASS: Live Tables uses bill_no=0 dataset
-PASS: Live Tables has no Dashboard API dependency
-PASS: successful empty Live response clears stale rows
-PASS: strict outlet identity is used in Live Tables
-PASS: table master/name resolver is present
-PASS: numeric table foreign keys are not displayed as table names
-PASS: manual refresh preserves the current outlet/date filter
-PASS: 30-second refresh interval
-PASS: periodic refresh overlap guard
-PASS: bounded Live request concurrency
-PASS: pubspec.yaml, analysis_options.yaml, and GitHub workflow YAML parse
-PASS: repository live_server_50x_smoke.sh shell syntax
-PASS: app version is 1.0.7+9
-PASS: login contract matches repository smoke-test headers
+ROOT CAUSE FIXED:
+PASS: Primary DashboardLogin request again sends the API key as multipart field `Keys`.
+PASS: Primary request retains the `Keys` header and LoginID/Password fields.
+PASS: The header-only `Keys` + `X-API-Key` contract is now only a controlled fallback.
+PASS: Explicit credential/API-key failures do not trigger duplicate fallback login calls.
+PASS: Generic request-format failures can use one compatibility fallback.
+
+LOGIN UX:
+PASS: Explicit wrong-password backend wording maps to a friendly Password error.
+PASS: Explicit wrong-user backend wording maps to a friendly User ID error.
+PASS: Ambiguous credential responses stay ambiguous instead of guessing.
+PASS: Timeout/offline/network/server-busy paths remain human-readable and show no raw status code.
+PASS: Fresh no-cache connection behavior remains for sign-in/API-key changes.
+
+REGRESSION CHECKS:
+PASS: Dashboard remains hard-locked to ids=0 and local selected-outlet filtering.
+PASS: Live Tables still use LiveTableItem/Sale with bill_no=0 dataset flow.
+PASS: 30-second non-overlapping sync behavior remains.
+PASS: Dart delimiter/source structural scan passed.
+PASS: pubspec.yaml, analysis_options.yaml and GitHub workflow YAML parse.
+PASS: live_server_50x_smoke.sh shell syntax passed.
+PASS: package version is 1.0.8+10.
 
 Environment limitation:
-Flutter SDK and Dart CLI are not installed in this execution environment, so flutter analyze, flutter test, and flutter build could not be executed locally here. The repository GitHub workflow remains configured to run formatting/analyze/test/build with Flutter 3.35.7.
+Flutter SDK and Dart CLI are not installed in this execution environment, so flutter analyze,
+flutter test, and flutter build could not be executed locally. The GitHub workflow remains
+configured to run format/analyze/test/build with Flutter 3.35.7.

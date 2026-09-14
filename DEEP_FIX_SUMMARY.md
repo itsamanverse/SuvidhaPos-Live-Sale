@@ -1,11 +1,11 @@
-# Deep Fix Summary — v1.0.7+9
+# Deep Fix Summary — v1.0.8+10
 
 This build focuses on login/API-key reliability, selected-outlet Dashboard
 correctness, Live Table name/sync accuracy, and lower sync latency.
 
 Key changes:
 - Typed friendly login/network errors; no raw HTTP/status-code login message.
-- Production login API-key header contract (`Keys` + `X-API-Key`).
+- Restored production login multipart `Keys` field (the v1.0.7 regression) with a single controlled header-profile fallback.
 - Dashboard selected-outlet filtering from authoritative `ids=0` data.
 - Correct All-Outlets handling for root summary vs per-outlet summary lists.
 - Expanded metric alias normalization and matching chart/popup values.
